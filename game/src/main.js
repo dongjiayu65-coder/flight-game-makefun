@@ -109,6 +109,8 @@ class Game {
     this.finishTime = -1;
     this.endReason = '';
     this.lifeBonus = 0;
+    this.ruinStep = 0; // v7 #4: how many PARTY RUINED milestones have paid out
+    this.restocked = false; // v7 #5: the 55s second helping has been served
     this.caption = '';
     this.nearMissLine = '';
     this.rank = null;
@@ -358,6 +360,11 @@ class Game {
   // of the remaining warning — greed, priced in milliseconds.
   placeBet() {
     if (this.bet >= V3.betMax || !this.fly.landedOn) return;
+    // v7 #1: a bet needs a live warning to pay for it. During the taunt
+    // delay (no ring yet) clicks do nothing — that used to be a free
+    // x2.5 with no shortened warning.
+    const live = this.director.attacks.some((a) => a.state === 'warning' && !a.finale && !a.decor && !a.idle);
+    if (!live) return;
     this.bet++;
     for (const atk of this.director.attacks) {
       if (atk.state === 'warning' && !atk.finale) {
@@ -646,10 +653,13 @@ class Game {
     if (this.blackoutT > 0) gained *= 1.5;
     gained = Math.round(gained);
     if (atk.finale) {
-      // The finale pays its own way (3000 x rating x M_combo) in
+      // The finale pays its own way (2000 x rating x capped M_combo) in
       // finaleExplosion; record the grade and take no dodge points.
+      // v7 #7: one rule everywhere — score with the combo as it stood
+      // BEFORE this dodge's +1 (as every normal dodge already does).
       atk.finaleRatingMult = rating.mult;
       atk.finaleRatingId = rating.id;
+      atk.finaleCombo = this.combo;
       gained = 0;
     }
     this.score += gained;
@@ -766,6 +776,7 @@ class Game {
     const gained = Math.round(points * chainMult * comboMult(this.combo));
     this.score += gained;
     this.chaosTotal += points * chainMult;
+    this.ruinMilestoneCheck();
     // Every smashed layer sprays harvestable crumbs (P1-2).
     this.spawnCrumbs(x, y, depth);
     if (depth >= 2) {
@@ -792,6 +803,20 @@ class Game {
     }
     this.floatText(x, y - 18, `+${gained}`, '#FFC94A', 19, { flyTo: true });
     return gained;
+  }
+
+  // v7 #4: PARTY RUINED pays out as it fills — a flat bonus at
+  // 25/50/75/100%, each with a banner and a jolt.
+  ruinMilestoneCheck() {
+    const ms = GAME.ruinMilestones;
+    while (this.ruinStep < ms.length && this.destruction01 >= ms[this.ruinStep].at) {
+      const m = ms[this.ruinStep++];
+      this.score += m.bonus;
+      const pct = Math.round(m.at * 100);
+      this.floatText(VIEW.width / 2, 268, `PARTY ${pct}% RUINED! +${m.bonus}`, pct >= 100 ? '#FF3FA4' : '#FFC94A', pct >= 100 ? 40 : 32);
+      this.shakeAmp = Math.max(this.shakeAmp, pct >= 100 ? 10 : 6);
+      this.sound.ding();
+    }
   }
 
   quipAt(human, text) {
@@ -1162,7 +1187,9 @@ class Game {
       // gradeDodge already ran for the finale attack and used the
       // widened window; the finale's own score lands here.
       const ratingMult = atk.finaleRatingMult ?? 1;
-      const gained = Math.round(GAME.finaleBase * ratingMult * comboMult(this.combo));
+      // v7 #2 / #7: combo as it stood before the finale dodge, capped x2.
+      const mCombo = Math.min(GAME.finaleComboCap, comboMult(atk.finaleCombo ?? this.combo));
+      const gained = Math.round(GAME.finaleBase * ratingMult * mCombo);
       this.score += gained;
       this.floatText(cake.x, cake.y - 96, this.copy.quipFor('finalePerfect'), '#FF3FA4', 40);
       this.floatText(cake.x, cake.y + 60, `+${gained}`, '#FFC94A', 26, { flyTo: true });
@@ -1340,6 +1367,13 @@ class Game {
       this.sound.ding();
       this.sound.startSong();
     }
+    // v7 #5: at 55s Mom brings seconds — every wrecked dish and prop
+    // comes back where it was, once. No new art: the fresh sprites
+    // simply return, with a banner line.
+    if (!this.restocked && e >= GAME.restockAt) {
+      this.restocked = true;
+      this.restock();
+    }
     // Random events on the spec's schedule (2.8).
     if (this.randomIdx < RANDOM_EVENTS.times.length && e >= RANDOM_EVENTS.times[this.randomIdx]) {
       this.randomIdx++;
@@ -1360,6 +1394,32 @@ class Game {
       this.burst(cake.x, cake.y, 34, '#FFD1DC', 240, 3.6, 0.8, 600);
       this.hud.announce(this.copy.finale.missed.draw() + ' The cake collapsed without you.', 2.4);
       this.sound.explosion();
+    }
+  }
+
+  restock() {
+    let n = 0;
+    for (const f of this.table.foods) {
+      if (f.id === 'cake') continue; // the cake is saved for the finale
+      if (f.state !== 'fresh') {
+        f.state = 'fresh';
+        f.stateT = 0;
+        n++;
+      }
+    }
+    for (const d of this.table.dressing) {
+      if (d.state !== 'fresh') {
+        d.state = 'fresh';
+        d.stateT = 0;
+        n++;
+      }
+    }
+    // Bent forks lying where they landed would double up with the
+    // restored ones.
+    this.landedProps = this.landedProps.filter((p) => p.kind !== 'fork-bent');
+    if (n > 0) {
+      this.floatText(VIEW.width / 2, 330, 'Mom brings seconds!', '#FFFFFF', 28);
+      this.burst(this.table.foods[1].x, this.table.foods[1].y, 10, '#FFFFFF', 90, 2.4, 0.5, 200);
     }
   }
 
