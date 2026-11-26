@@ -70,16 +70,20 @@ export const FLY = {
   // cursor, so the fly overshoots a little and feels alive.
   springK: 42,
   springDamp: 9.5,
-  maxSpeed: 540,
+  // P1-1 (scale pass): the spec's speeds and distances are written
+  // for 960x540; the stage is 1280x800 and the impact/ring radii were
+  // already scaled x1.33, so the fly's own speeds now follow suit —
+  // otherwise it is relatively slower and its flash shorter than spec.
+  maxSpeed: 720, // spec 540 x 1.333
   // The flash (spec 3.2).
-  flashDistance: 110,
-  flashDistanceRainbow: 126,
+  flashDistance: 146, // spec 110 x 1.333
+  flashDistanceRainbow: 168, // spec 126 x 1.333
   flashDuration: 0.12,
   flashIframes: 0.18,
   flashCooldown: 0.9,
   flashCooldownFlame: 0.75,
   flashBuffer: 0.1, // input buffering window, seconds
-  landSpeed: 60, // below this, inside a zone, the landing clock runs
+  landSpeed: 80, // spec 60 x 1.333 — below this, inside a zone, the landing clock runs
   landTime: 0.2, // sustained, and the fly has landed (spec 3.3)
 };
 
@@ -127,7 +131,8 @@ export const RATINGS = [
   { id: 'good', label: 'Good', maxRemainMs: 500, mult: 2, bonus: 0 },
   { id: 'early', label: 'Early', maxRemainMs: Infinity, mult: 1, bonus: 0 },
 ];
-export const PERFECT_GRACE_MS = 16; // one invisible frame of grace
+export const PERFECT_GRACE_MS = 16; // one invisible frame of grace, AFTER impact only
+export const CHAIN_MAX_DEPTH = 5; // P1-3: spec 2.5, deepest chain layer that may fire
 export const FINALE_PERFECT_MS = 120; // the finale widens the window
 
 export const COMBO = {
@@ -205,6 +210,18 @@ export const HUMANS = {
   count: 4,
 };
 
+// Expression system (design list P1). Durations in seconds.
+export const MOOD = {
+  annoyDecayEvery: 10, // P1-4: annoyCount -1 per 10s without a new offence
+  shockTime: 1.5, // splashed / dish smashed in front of you
+  gloatTime: 1.5, // the nearest bystander laughs at the victim
+  slapStretchTime: 0.4, // slapped: 1.3x wide, springing back to 1.0
+  popTime: 0.12, // every frame change: a 1.15x squash-bounce
+  steamFrom: 55, // default face becomes angry + steam
+  terrifiedFrom: 80, // the finale: everybody is terrified
+  suspiciousAt: 0.25, // destruction: default face caps at suspicious
+};
+
 // --- v3 gameplay pass (flight-v3-plan.md, 2026-11-26) ----------------
 // P0-1: the palm no longer lands where the taunt started — during
 // the warning the shadow TRACKS the fly at a capped speed, so the
@@ -227,7 +244,7 @@ export const V3 = {
   chainHealDepth: 3, // a chain this deep refunds one heart
   crumbPerLayer: [3, 5], // crumbs sprayed per chain layer (min, max)
   crumbLife: 4, // seconds a crumb waits to be harvested
-  crumbRadius: 28, // fly pickup distance
+  crumbRadius: 37, // fly pickup distance (spec 28 x 1.333)
   crumbScore: 20,
   crumbDecayBonus: 0.5, // seconds added to the combo decay deadline
   crumbCooldownCut: 0.1, // seconds shaved off the flash cooldown

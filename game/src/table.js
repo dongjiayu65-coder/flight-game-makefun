@@ -64,9 +64,13 @@ export class Table {
       }
     }
 
-    // Dressing: rice bowls, tea things, cutlery — a lived-in table.
+    // Dressing (design list #3): only what the S2 atlas can paint —
+    // cups, forks, knives, side plates. The rice bowls, teacups,
+    // chopsticks, sauce dishes, napkins and teapot were code-drawn
+    // placeholders and are gone. (Fewer rng draws: seeded layouts
+    // shift once relative to v5.)
     this.dressing = [];
-    const kinds = ['rice', 'teacup', 'cup', 'plate', 'fork', 'knife', 'sticks', 'sauce', 'napkin', 'teacup', 'fork', 'plate'];
+    const kinds = ['cup', 'plate', 'fork', 'knife', 'cup', 'fork', 'plate', 'knife'];
     for (let i = 0; i < kinds.length; i++) {
       this.dressing.push({
         kind: kinds[i],
@@ -78,7 +82,6 @@ export class Table {
         stateT: 0,
       });
     }
-    this.dressing.push({ kind: 'teapot', x: t.x + t.w * 0.32 + (rng() - 0.5) * 60, y: t.y + 54 + rng() * 18, r: 21, rot: 0, state: 'fresh', stateT: 0 });
     // Keep dressing out of the dishes' plates.
     this.dressing = this.dressing.filter(
       (d) => !this.foods.some((f) => Math.hypot(d.x - f.x, d.y - f.y) < f.r + d.r + 10),
@@ -109,7 +112,17 @@ export class Table {
       cooldownT: 0, // personal slap cooldown (spec 2.2)
       blockedT: 0, // cannot slap at all (standing in soup, posing…)
       angryT: 0,
-      annoyCount: 0, // times wronged this run (v5: repeats fester longer)
+      annoyCount: 0, // times wronged recently (v5: repeats fester longer)
+      annoyDecayT: 0, // P1-4: seconds since the last offence, for decay
+      // Expression system (design list P1).
+      shockT: 0, // splashed / dish smashed in front: short reaction
+      shockExpr: 'angry',
+      gloatT: 0, // laughing at somebody else's misfortune
+      slapT: 0, // slapped stretch spring-back
+      popT: 0, // frame-change squash-bounce
+      shownExpr: 'happy', // last frame actually decided (change detector)
+      aiming: false, // currently owns a live warning
+      steam: false, // 55s+: default angry, steaming
       stateT: 0,
       // Accumulated ruin (the results photo reads these).
       soupFace: false,

@@ -82,14 +82,16 @@ export class Hud {
       }
       ctx.restore();
     }
-    // The candle timer, top-centre: a wax bar that burns down.
+    // The candle timer (design #4): moved from top-centre — where it
+    // sat on Mom's bun and her steam — to the left column, under the
+    // Party Ruined meter.
     const tk = this.slideK(game, 0.15);
     if (tk > 0) {
       ctx.save();
-      ctx.translate(0, -46 * (1 - tk));
-      const w = 300;
-      const x = VIEW.width / 2 - w / 2;
-      const y = 26;
+      ctx.translate(-60 * (1 - tk), 0);
+      const w = 240;
+      const x = 30;
+      const y = 150;
       const left = Math.max(0, 1 - game.elapsed / GAME.duration);
       ctx.fillStyle = 'rgba(43,27,46,0.6)';
       roundRect(ctx, x - 6, y - 6, w + 12, 26, 10);
@@ -114,13 +116,13 @@ export class Hud {
       ctx.ellipse(fx, y - 3, 2.2 * fl, 4 * fl, 0, 0, TAU);
       ctx.fill();
       ctx.font = `800 19px ${FONT}`;
-      ctx.textAlign = 'center';
+      ctx.textAlign = 'left';
       ctx.lineWidth = 4;
       ctx.strokeStyle = OUTLINE;
       const label = game.tutorial !== 'done' ? 'WARM-UP' : `${Math.ceil(GAME.duration - game.elapsed)}s`;
-      ctx.strokeText(label, VIEW.width / 2, y + 34);
+      ctx.strokeText(label, x + w + 14, y + 13);
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(label, VIEW.width / 2, y + 34);
+      ctx.fillText(label, x + w + 14, y + 13);
       ctx.restore();
     }
     // Score, top-right.
@@ -174,20 +176,58 @@ export class Hud {
       ctx.fillText(`${Math.round(game.destruction01 * 100)}%`, x + w + 14, y + 14);
       ctx.restore();
     }
-    // The combo rides on the fly (spec 1.4), magenta and growing.
+    // The combo rides on the fly (spec 1.4) — design #5: big hot
+    // magenta with a thick ink outline and a white inner edge, 34px
+    // and up, bumping on every gain, lifted above-right of the fly so
+    // it never sits on the prop underneath. Grey + shake while it
+    // decays. The tier name sits under the number from GOLDEN up.
     if (game.combo >= 2) {
-      const decaying = game.clock - game.lastGoodClock > 4;
+      const decaying = game.clock > game.decayDeadline;
+      if (game.combo !== this.lastCombo) {
+        if (game.combo > (this.lastCombo ?? 0)) this.comboBumpT = 0.18;
+        this.lastCombo = game.combo;
+      }
+      this.comboBumpT = Math.max(0, (this.comboBumpT ?? 0) - dt);
+      const bump = 1 + (this.comboBumpT / 0.18) * 0.35;
+      const size = 34 + Math.min(20, game.combo);
+      let cx = game.fly.x + 40;
+      let cy = game.fly.y - 40;
+      if (cx > VIEW.width - 60) cx = game.fly.x - 70;
+      if (cy < 40) cy = game.fly.y + 56;
       ctx.save();
-      ctx.translate(game.fly.x + 30, game.fly.y - 26);
-      if (decaying) ctx.translate(Math.sin(t * 30) * 1.6, 0);
-      ctx.font = `800 ${20 + Math.min(16, game.combo)}px ${FONT}`;
-      ctx.lineWidth = 5;
+      ctx.translate(cx, cy);
+      if (decaying) ctx.translate(Math.sin(t * 30) * 2, 0);
+      ctx.rotate(-0.08);
+      ctx.scale(bump, bump);
+      ctx.font = `800 ${size}px ${FONT}`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 9;
       ctx.strokeStyle = OUTLINE;
+      ctx.strokeText(`x${game.combo}`, 0, 0);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#FFFFFF';
       ctx.strokeText(`x${game.combo}`, 0, 0);
       ctx.fillStyle = decaying ? '#9a8fa8' : PALETTE.magenta;
       ctx.fillText(`x${game.combo}`, 0, 0);
+      const tierName = { gold: 'GOLDEN', flame: 'ON FIRE', rainbow: 'RAINBOW' }[game.tier.id];
+      if (tierName) {
+        ctx.font = `800 15px ${FONT}`;
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = OUTLINE;
+        ctx.strokeText(tierName, 2, size * 0.62);
+        ctx.fillStyle = { gold: PALETTE.butter, flame: PALETTE.tomato, rainbow: `hsl(${(t * 240) % 360},90%,65%)` }[game.tier.id];
+        ctx.fillText(tierName, 2, size * 0.62);
+      }
       ctx.restore();
+    } else {
+      this.lastCombo = game.combo;
     }
+    // Design #2: the controls, as icons, for 3s after the opening —
+    // replacing the page's two-line text wall. Mouse = fly, SPACE =
+    // dodge, CLICK (while landed) = raise the bet.
+    if (game.hintsT > 0) this.drawControlIcons(ctx, Math.min(1, game.hintsT / 0.5), t);
     // CHAIN banner, fixed under the timer (spec 1.5).
     if (game.chainPop) {
       game.chainPop.t += dt;
@@ -196,7 +236,7 @@ export class Hud {
       else {
         const subs = { 3: 'Chaos!', 4: 'Total chaos!', 5: 'DOMINO DINNER!' };
         ctx.save();
-        ctx.translate(VIEW.width / 2, 118);
+        ctx.translate(VIEW.width / 2, 236); // design #4: below Mom, not on her
         const pop = cp.t < 0.12 ? 0.7 + (cp.t / 0.12) * 0.3 : 1;
         ctx.scale(pop, pop);
         ctx.globalAlpha = cp.t > 0.85 ? 1 - (cp.t - 0.85) / 0.25 : 1;
@@ -226,35 +266,132 @@ export class Hud {
       ctx.textAlign = 'center';
       ctx.lineWidth = 6;
       ctx.strokeStyle = OUTLINE;
-      ctx.strokeText(this.announceText, VIEW.width / 2, 168);
+      ctx.strokeText(this.announceText, VIEW.width / 2, 300); // design #4: clear of Mom
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(this.announceText, VIEW.width / 2, 168);
+      ctx.fillText(this.announceText, VIEW.width / 2, 300);
       ctx.restore();
     }
-    // Tutorial stage directions.
+    // (Design #2: the soup-step text direction is gone — the ghost
+    // path and the mouse icon teach it without words, spec 3.5.)
     if (game.tutorial === 'script' && game.tutPhase === 'soup') {
-      ctx.save();
-      ctx.font = `800 24px ${FONT}`;
-      ctx.textAlign = 'center';
-      ctx.lineWidth = 5;
-      ctx.strokeStyle = OUTLINE;
-      const msg = 'Land on the soup. Taunt them. Then DODGE.';
-      ctx.strokeText(msg, VIEW.width / 2, VIEW.height - 66);
-      ctx.fillStyle = PALETTE.cyan;
-      ctx.fillText(msg, VIEW.width / 2, VIEW.height - 66);
-      ctx.restore();
+      this.drawMouseIcon(ctx, VIEW.width - 92, VIEW.height - 92, t, 1);
     }
     if (game.paused) {
-      ctx.fillStyle = 'rgba(11,6,18,0.55)';
+      // Design #2: the pause page is where the full rules live now.
+      ctx.fillStyle = 'rgba(11,6,18,0.72)';
       ctx.fillRect(0, 0, VIEW.width, VIEW.height);
       ctx.font = `800 44px ${FONT}`;
       ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
       ctx.lineWidth = 7;
       ctx.strokeStyle = OUTLINE;
-      ctx.strokeText('PAUSED', VIEW.width / 2, VIEW.height / 2);
+      ctx.strokeText('PAUSED', VIEW.width / 2, 200);
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText('PAUSED', VIEW.width / 2, VIEW.height / 2);
+      ctx.fillText('PAUSED', VIEW.width / 2, 200);
+      const rows = [
+        ['MOUSE', 'Fly. Land on food, faces, anything — somebody WILL swing.'],
+        ['SPACE', 'Dodge (or right-click / second finger). Later = bigger grade.'],
+        ['CLICK', 'While landed: raise the bet. Bigger grade, faster slap.'],
+        ['CHAIN', 'Drag the hand onto soup, forks, heads — wreck the table.'],
+        ['0:10', 'The cake. Land on it. All four hands.'],
+        ['R / P', 'Restart / pause'],
+      ];
+      rows.forEach(([k, v], i) => {
+        const y = 270 + i * 46;
+        ctx.font = `800 22px ${FONT}`;
+        ctx.textAlign = 'right';
+        ctx.lineWidth = 5;
+        ctx.strokeText(k, 420, y);
+        ctx.fillStyle = PALETTE.butter;
+        ctx.fillText(k, 420, y);
+        ctx.font = `700 21px ${FONT}`;
+        ctx.textAlign = 'left';
+        ctx.strokeText(v, 446, y);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(v, 446, y);
+      });
+      ctx.font = `800 20px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.strokeText('Press P to resume', VIEW.width / 2, 600);
+      ctx.fillStyle = PALETTE.cyan;
+      ctx.fillText('Press P to resume', VIEW.width / 2, 600);
     }
+  }
+
+  // Design #2 helpers: wordless control icons.
+  drawMouseIcon(ctx, x, y, t, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const sway = Math.sin(t * 3) * 10;
+    ctx.translate(x + sway, y);
+    ctx.fillStyle = '#FFFFFF';
+    roundRect(ctx, -16, -24, 32, 48, 16);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = OUTLINE;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, -24);
+    ctx.lineTo(0, -6);
+    ctx.stroke();
+    // motion arrows
+    ctx.strokeStyle = PALETTE.cyan;
+    ctx.lineWidth = 3;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(s * 26, 0);
+      ctx.lineTo(s * 38, 0);
+      ctx.lineTo(s * 32, -6);
+      ctx.moveTo(s * 38, 0);
+      ctx.lineTo(s * 32, 6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawKeyIcon(ctx, x, y, w, label, fill, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#B8352C';
+    roundRect(ctx, x - w / 2, y - 16, w, 38, 9);
+    ctx.fill();
+    ctx.fillStyle = fill;
+    roundRect(ctx, x - w / 2, y - 20, w, 34, 9);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = OUTLINE;
+    ctx.stroke();
+    ctx.font = `800 17px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = OUTLINE;
+    ctx.fillText(label, x, y - 3);
+    ctx.restore();
+  }
+
+  drawControlIcons(ctx, alpha, t) {
+    const y = VIEW.height - 64;
+    const cx = VIEW.width / 2;
+    ctx.save();
+    ctx.fillStyle = `rgba(26,13,32,${0.7 * alpha})`;
+    roundRect(ctx, cx - 250, y - 40, 500, 76, 18);
+    ctx.fill();
+    ctx.restore();
+    this.drawMouseIcon(ctx, cx - 170, y, t, alpha);
+    this.drawKeyIcon(ctx, cx, y, 120, 'SPACE', '#FFFFFF', alpha);
+    this.drawKeyIcon(ctx, cx + 170, y, 92, 'CLICK', PALETTE.butter, alpha);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = `800 13px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = OUTLINE;
+    for (const [lx, txt] of [[cx - 170, 'FLY'], [cx, 'DODGE'], [cx + 170, 'BET']]) {
+      ctx.strokeText(txt, lx, y + 30);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(txt, lx, y + 30);
+    }
+    ctx.restore();
   }
 
   drawTitle(game) {

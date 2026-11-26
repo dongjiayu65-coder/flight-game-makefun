@@ -228,6 +228,10 @@ export class Director {
       h.blockedT = Math.max(0, h.blockedT - dt);
       h.angryT = Math.max(0, h.angryT - dt);
       h.exprT = Math.max(0, h.exprT - dt);
+      h.shockT = Math.max(0, (h.shockT ?? 0) - dt);
+      h.gloatT = Math.max(0, (h.gloatT ?? 0) - dt);
+      h.slapT = Math.max(0, (h.slapT ?? 0) - dt);
+      h.popT = Math.max(0, (h.popT ?? 0) - dt);
       h.stateT += dt;
     }
     for (const f of this.table.foods) f.stateT += dt;

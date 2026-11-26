@@ -6,7 +6,7 @@
 // instead, in chains (E1-E10). Combo feeds chaos, chaos feeds
 // combo. Three hits or ninety seconds end the party.
 
-import { VIEW, ROOM, FLY, TAUNT, RATINGS, PERFECT_GRACE_MS, FINALE_PERFECT_MS, COMBO, EVENTS, RANDOM_EVENTS, PHASES, GAME, V3 } from './config.js';
+import { VIEW, ROOM, FLY, TAUNT, RATINGS, FINALE_PERFECT_MS, CHAIN_MAX_DEPTH, COMBO, EVENTS, RANDOM_EVENTS, PHASES, GAME, V3, MOOD } from './config.js';
 import { makeRng } from './random.js';
 import { Table } from './table.js';
 import { Fly } from './fly.js';
@@ -91,7 +91,11 @@ class Game {
     this.hoverZone = null;
     this.tauntClock = 0;
     this.idleClock = 0;
-    this.pendingFlash = false;
+    this.pendingFlashAt = -1; // P1-2: clock of a buffered press (-1 none), expires after 100ms
+    this.graceHits = []; // P1-1: catches held one frame for a post-impact PERFECT press
+    this.stepCount = 0; // test hook: simulation steps run this page session
+    this.hintsT = 0; // design #2: control icons shown for 3s after the opening
+    this.tierRing = null; // design #5: transformation shockwave {t, color}
     this.queuedFlash = false; // P0-1: latched dodge press, cleared by step()
     this.prevFlashReady = true;
     this.eventQueue = []; // {at, fn} derivations, 0.3s per chain layer
@@ -143,6 +147,22 @@ class Game {
 
   start() {
     this.state = 'playing';
+  }
+
+  // Test hook (expr-test A1): jump past the opening script so a
+  // directed test is never parked inside the tutorial near-freeze
+  // (time scale 0.05 while the fly sits under Dad's palm — by design
+  // it does not release until a press). Pair with stepCount to wait
+  // on simulation steps rather than on animation frames.
+  skipTutorial() {
+    this.director.attacks = [];
+    this.tutAttack = null;
+    this.tutDodged = true;
+    this.tutorial = 'done';
+    this.tutPhase = 'done';
+    this.ghostTarget = null;
+    this.hudSlideT = 1;
+    this.showKeycap = false;
   }
 
   get tier() {
@@ -198,7 +218,7 @@ class Game {
     if (META.gallery.has(id)) return;
     META.gallery.add(id);
     persistMeta();
-    this.floatText(VIEW.width / 2, 150, 'NEW DISASTER!', '#ffd94d', 30);
+    this.floatText(VIEW.width / 2, 210, 'NEW DISASTER!', '#ffd94d', 30); // design #4: clear of Mom
     this.sound.comboUp();
   }
 
@@ -219,7 +239,9 @@ class Game {
     this.time += dt;
     this.stepFx(dt);
     if (this.state !== 'playing') return;
+    this.stepCount++;
     this.clock += dt;
+    this.hintsT = Math.max(0, this.hintsT - dt);
     if (this.tutorial === 'done') this.elapsed += dt;
     this.tierPopT = Math.max(0, this.tierPopT - dt);
     if (this.chainPop) {
@@ -267,6 +289,21 @@ class Game {
     this.fly.update(dt, steer, null, inMist);
     this.sound.buzz(true);
 
+    // P1-1: a catch held for the one-frame post-impact grace. If the
+    // flash fired in that frame it is a PERFECT escape at 0ms; if not,
+    // the catch lands now. Processed BEFORE this step's new impacts,
+    // so every held catch waits exactly one step.
+    if (this.graceHits.length) {
+      const held = this.graceHits.splice(0);
+      for (const g of held) {
+        if (this.fly.iframesT > 0) {
+          g.flashRemainMs = 0;
+          g.wasInside = true;
+          g.exitByFlash = true;
+        }
+        this.resolveImpact(g);
+      }
+    }
     const impacts = this.director.update(dt, this.fly);
     // The lock "clack" (P0-1): the moment a tracking point settles.
     for (const atk of this.director.attacks) {
@@ -284,7 +321,7 @@ class Game {
     this.comboLogic(dt);
     this.dogLogic(dt);
     this.phaseLogic();
-    this.expressionLogic();
+    this.expressionLogic(dt);
     this.sound.update(dt, { playing: true, flySpeed: this.fly.speed, landed: !!this.fly.landedOn, warnMs: this.warnRemainMs(), bet: this.bet });
 
     if (this.resultsAt > 0 && this.clock >= this.resultsAt) return this.finish(this.endReason);
@@ -411,32 +448,44 @@ class Game {
       this.betAtFlash = this.bet;
       this.bet = 0;
     };
-    if (input.flashPressed) {
-      if (this.fly.flashReady) {
-        const tgt = this.flashTarget();
-        const cd = this.tier.id === 'flame' || this.tier.id === 'rainbow' ? FLY.flashCooldownFlame : FLY.flashCooldown;
-        if (this.fly.startFlash(tgt.x, tgt.y, cd)) {
-          spendBet();
-          this.sound.dash(0.8);
-        }
-      } else {
-        this.fly.bufferFlash();
-        this.pendingFlash = true;
-      }
-    }
-    if (this.pendingFlash && this.fly.flashReady) {
-      this.pendingFlash = false;
+    const fire = () => {
       const tgt = this.flashTarget();
       const cd = this.tier.id === 'flame' || this.tier.id === 'rainbow' ? FLY.flashCooldownFlame : FLY.flashCooldown;
-      if (this.fly.startFlash(tgt.x, tgt.y, cd)) {
-        spendBet();
-        this.sound.dash(0.8);
+      if (!this.fly.startFlash(tgt.x, tgt.y, cd)) return false;
+      spendBet();
+      this.sound.dash(0.8);
+      // P1-1: the grade is read at the moment the flash leaves —
+      // stamp every live warning the fly is under with its time left.
+      for (const atk of this.director.attacks) {
+        if (atk.state !== 'warning' || atk.decor) continue;
+        if (this.flyInShape(atk, this.flashFrom().x, this.flashFrom().y)) {
+          atk.flashRemainMs = (atk.dur - atk.t) * 1000;
+        }
+      }
+      return true;
+    };
+    if (input.flashPressed) {
+      if (this.fly.flashReady) fire();
+      else this.pendingFlashAt = this.clock; // P1-2: buffer, 100ms shelf life
+    }
+    if (this.pendingFlashAt >= 0) {
+      if (this.clock - this.pendingFlashAt > FLY.flashBuffer) {
+        this.pendingFlashAt = -1; // expired: a stale press never fires later
+      } else if (this.fly.flashReady) {
+        this.pendingFlashAt = -1;
+        fire();
       }
     }
     // The "pop" when the flash comes back (spec 3.2).
     const ready = this.fly.flashReady;
     if (ready && !this.prevFlashReady) this.sound.pop();
     this.prevFlashReady = ready;
+  }
+
+  // Where the current flash started (the fly has already moved 0px
+  // on the frame it fires, so this is its position at the press).
+  flashFrom() {
+    return this.fly.flashing ? this.fly.flashFrom : { x: this.fly.x, y: this.fly.y };
   }
 
   // Per-frame escape bookkeeping: while the fly is inside an attack's
@@ -475,11 +524,22 @@ class Game {
     // P0-3: the finale's three companion palms are pure spectacle.
     if (atk.decor) return;
     // A spilled drink makes the hand slip (E7): the impact point
-    // skids before anything is judged.
-    if (this.puddle && atk.kind === 'palm' && !atk.finale) {
+    // skids before anything is judged (once — a graced catch comes
+    // back through here a frame later).
+    if (this.puddle && atk.kind === 'palm' && !atk.finale && !atk.skidded) {
       const a = this.rng() * Math.PI * 2;
       atk.x += Math.cos(a) * 30;
       atk.y += Math.sin(a) * 30;
+    }
+    atk.skidded = true;
+    // P1-1: spec 2.3's one invisible frame AFTER impact. A fly that
+    // is about to be caught gets one more step to press; the catch
+    // (or the 0ms PERFECT) resolves at the top of the next step.
+    if (!atk.graced && !atk.tutorial && this.flyInShape(atk, this.fly.x, this.fly.y) &&
+        this.fly.iframesT <= 0 && this.fly.invulnT <= 0 && this.fly.squashT <= 0) {
+      atk.graced = true;
+      this.graceHits.push(atk);
+      return;
     }
     this.sound.thud();
     this.shakeAmp = Math.max(this.shakeAmp, 4);
@@ -558,8 +618,12 @@ class Game {
   }
 
   gradeDodge(atk) {
-    let remainMs = atk.remainMs ?? atk.dur * 1000;
-    if (this.fly.iframesT > 0) remainMs = Math.min(remainMs, PERFECT_GRACE_MS + 54);
+    // P1-1: graded by the PRESS — the time left when the flash fired
+    // under this warning — not by the last frame the fly sat inside.
+    // The old "iframes up = PERFECT" shortcut made the last ~180ms all
+    // PERFECT; it is gone. Only a fly that never flashed (a wander-out
+    // kept for safety) falls back to its exit frame.
+    const remainMs = atk.flashRemainMs ?? atk.remainMs ?? atk.dur * 1000;
     let rating = RATINGS[RATINGS.length - 1];
     const perfectWindow = atk.finale ? FINALE_PERFECT_MS : RATINGS[0].maxRemainMs;
     // P0-2: while the early mercy lasts, Close forgives 260ms.
@@ -620,7 +684,17 @@ class Game {
         this.lastTier = tier.id;
         this.tierPopT = 0.35;
         this.freezeT = Math.max(this.freezeT, 0.08);
-        this.floatText(this.fly.x, this.fly.y - 40, tier.label, '#ffd94d', 30);
+        // Design #5: a transformation must be impossible to miss — a
+        // big label, a tier-coloured shockwave, a spray of sparks, a
+        // jolt, and the HUD says it too.
+        const tierColor = { gold: '#FFC94A', flame: '#FF5A4E', rainbow: '#FF3FA4' }[tier.id] ?? '#FFC94A';
+        this.floatText(this.fly.x, this.fly.y - 48, tier.label, tierColor, 44);
+        this.burst(this.fly.x, this.fly.y, 28, tierColor, 260, 3.6, 0.7, 120);
+        this.burst(this.fly.x, this.fly.y, 12, '#FFFFFF', 180, 2.4, 0.5, 120);
+        this.tierRing = { t: 0, color: tierColor };
+        this.shakeAmp = Math.max(this.shakeAmp, 5);
+        this.whiteFlashT = Math.max(this.whiteFlashT, 0.06);
+        this.hud.announce(tier.label, 1.2);
         this.sound.comboUp();
         if (tier.id === 'rainbow') this.unlock('rainbowFly');
       }
@@ -802,6 +876,8 @@ class Game {
   // Fire one object's chain event. depth starts at 1 for the thing
   // directly under the hand.
   smash(target, atk, depth) {
+    // P1-3: spec 2.5 — a chain is at most 5 layers deep.
+    if (depth > CHAIN_MAX_DEPTH) return;
     const { x, y } = atk;
     this.addStain(x, y, target.kind);
     // A dish wrecked right in front of someone is a wrong done to
@@ -811,6 +887,11 @@ class Game {
     if (target.kind === 'greens' || target.kind === 'chicken' || target.kind === 'cake') {
       const near = this.director.nearestHuman(target.x, target.y);
       if (near) this.provoke(near);
+      // Design P1: the dish in front of you smashed is a shock. The
+      // birthday cake is special — Timmy is about to cry, not fight.
+      const timmy = this.table.humans[2];
+      if (target.kind === 'cake') this.shock(timmy, 'scared');
+      else if (near) this.shock(near, 'angry');
     }
     switch (target.kind) {
       case 'head': return this.eventHead(target.ref, atk, depth);
@@ -840,12 +921,17 @@ class Game {
   }
 
   eventHead(h, atk, depth, bypassCd = false) {
+    // P1-3: the brawl derivation re-enters here directly (not via
+    // smash), so the depth cap is enforced here too.
+    if (depth > CHAIN_MAX_DEPTH) return;
     if (!bypassCd && !this.eventReady(h, EVENTS.head.cooldown)) return;
     this.addChaos(EVENTS.head.chaos, depth, h.x, h.y);
     h.palmPrint = true;
     h.expression = 'slapped';
     h.exprT = 1.2;
+    h.slapT = MOOD.slapStretchTime; // the 1.3x-wide face springs back over 0.4s
     this.provoke(h);
+    this.gloatAt(h);
     h.stateT = 0;
     this.events.palmPrint = true;
     this.burst(h.x, h.y, 10, 'rgba(240,180,120,0.9)', 90, 2.4, 0.4, 300);
@@ -919,13 +1005,14 @@ class Game {
     if (best) {
       best.soupFace = true;
       best.blockedT = Math.max(best.blockedT, 3); // standing, dripping, useless
-      // A face full of soup is furious, not startled (v5): the
-      // decal alone used to land here while the expression
-      // machine never heard about it, so Mom wore the soup over
-      // a smile. Angry at once, and it festers via provoke().
-      best.expression = 'angry';
+      // A face full of soup is furious, not startled (v5). The
+      // expression is decided by expressionLogic from these timers
+      // (P1-4: the direct `expression = 'angry'` here was overwritten
+      // next frame anyway and is gone).
       best.stateT = 0;
+      this.shock(best, 'angry');
       this.provoke(best);
+      this.gloatAt(best);
       this.events.soupFace = true;
       this.quipAt(best, this.copy.quipFor('soup', best.name));
       if (best.name === 'Mom') this.unlock('soupBun');
@@ -973,7 +1060,7 @@ class Game {
   }
 
   eventLamp(depth) {
-    if (this.table.lampDropped) return;
+    if (depth > CHAIN_MAX_DEPTH || this.table.lampDropped) return;
     this.eventCd.set('lamp', Infinity);
     this.addChaos(EVENTS.lamp.chaos, depth, this.table.lamp.x, this.table.lamp.y + 30);
     this.table.lampSwingT = 3;
@@ -1349,6 +1436,7 @@ class Game {
         this.tutorial = 'done';
         this.tutPhase = 'done';
         this.tutDodged = true;
+        this.hintsT = 3; // design #2: the control icons, 3s
       }
       return;
     }
@@ -1408,6 +1496,7 @@ class Game {
         this.tutPhase = 'done';
         this.tutorial = 'done';
         this.ghostTarget = null;
+        this.hintsT = 3; // design #2: the control icons, 3s
         this.hud.announce('Ruin the party!', 1.6);
         this.queueEvent(1.7, () => {
           if (this.state === 'playing') this.hud.announce('90 SECONDS. GO!', 1.4);
@@ -1458,24 +1547,86 @@ class Game {
   // talked to the expression machine — this is that conversation.
   provoke(h) {
     h.annoyCount = (h.annoyCount ?? 0) + 1;
+    h.annoyDecayT = 0; // P1-4: a fresh offence restarts the 10s forgiveness clock
     const dur = h.annoyCount >= 2 ? 8 : 4;
     h.angryT = Math.max(h.angryT, dur + Math.max(0, h.exprT));
   }
 
-  expressionLogic() {
-    const destruction = this.destruction01;
+  // A short, loud reaction (splashed, dish wrecked in front of you).
+  shock(h, expr) {
+    if (!h) return;
+    h.shockT = MOOD.shockTime;
+    h.shockExpr = expr;
+  }
+
+  // Schadenfreude (design P1): the bystander nearest the victim laughs
+  // for 1.5s — no new art, just the happy frame at the worst moment.
+  gloatAt(victim) {
+    let best = null;
+    let bd = Infinity;
     for (const h of this.table.humans) {
-      if (h.exprT > 0) continue; // a set-piece expression holds
-      if (this.photoT > 0) h.expression = 'happy';
-      else if (h.angryT > 0) h.expression = 'angry';
-      else if (this.director.attacks.some((a) => a.state === 'warning' && a.owner === h)) h.expression = 'angry';
-      // The room's mood sours with the wreckage (v5 thresholds):
-      // a quarter ruined and nobody's smiling along, half ruined
-      // and the default face is fury. A lapsed provocation falls
-      // back to THIS, never straight to happy.
-      else if (destruction >= 0.5) h.expression = 'angry';
-      else if (destruction >= 0.25) h.expression = 'suspicious';
-      else h.expression = 'happy';
+      if (h === victim || h.shockT > 0 || h.exprT > 0) continue;
+      const d = Math.hypot(h.x - victim.x, h.y - victim.y);
+      if (d < bd) {
+        bd = d;
+        best = h;
+      }
+    }
+    if (best) best.gloatT = MOOD.gloatTime;
+  }
+
+  // The expression machine (design P1). One fixed priority ladder,
+  // highest first:
+  //   slapped (set-piece) > shocked (souped / dish smashed) > aiming
+  //   > gloating > provoked angry > the room's default face.
+  // The default face caps at SUSPICIOUS (25%+ ruined) — angry is kept
+  // for faces that mean something (provoked, aiming) — except that
+  // from 55s the whole room defaults to angry with steam, and from
+  // 80s (the finale) everyone is terrified. Anybody wearing a decal
+  // (soup, handprint, food hat) never drops below suspicious.
+  expressionLogic(dt = 0) {
+    const destruction = this.destruction01;
+    const e = this.elapsed;
+    const finale = this.tutorial === 'done' && e >= MOOD.terrifiedFrom;
+    for (const h of this.table.humans) {
+      // P1-4: grudges fade — annoyCount -1 per 10s with no new offence.
+      h.annoyDecayT = (h.annoyDecayT ?? 0) + dt;
+      if (h.annoyCount > 0 && h.annoyDecayT >= MOOD.annoyDecayEvery) {
+        h.annoyCount--;
+        h.annoyDecayT = 0;
+      }
+      h.aiming = this.director.attacks.some((a) => a.state === 'warning' && a.owner === h && !a.decor && !a.idle);
+      h.steam = false;
+      let expr;
+      if (h.exprT > 0) {
+        expr = h.expression; // a set-piece (slapped / tutorial scare) holds
+      } else if (h.shockT > 0) {
+        expr = h.shockExpr;
+      } else if (finale) {
+        expr = 'scared'; // the finale: four hands, four terrified faces
+      } else if (this.photoT > 0) {
+        expr = 'happy'; // say cheese (soup and all)
+      } else if (h.aiming) {
+        expr = 'angry';
+      } else if (h.gloatT > 0) {
+        expr = 'happy';
+      } else if (h.angryT > 0) {
+        expr = 'angry';
+      } else if (this.tutorial === 'done' && e >= MOOD.steamFrom) {
+        expr = 'angry';
+        h.steam = true;
+      } else if (destruction >= MOOD.suspiciousAt) {
+        expr = 'suspicious';
+      } else {
+        expr = 'happy';
+      }
+      const decorated = h.soupFace || h.palmPrint || h.hatKind;
+      if (decorated && expr === 'happy' && h.gloatT <= 0 && this.photoT <= 0) expr = 'suspicious';
+      if (expr !== h.shownExpr) {
+        h.popT = MOOD.popTime; // every frame change squash-bounces
+        h.shownExpr = expr;
+      }
+      h.expression = expr;
     }
   }
 
@@ -1558,6 +1709,10 @@ class Game {
       else this.landedProps.push({ kind: pr.kind, x: pr.toX, y: pr.toY, rot: pr.rot });
     }
     for (const d of this.table.dressing) if (d.hopT) d.hopT = Math.max(0, d.hopT - dt);
+    if (this.tierRing) {
+      this.tierRing.t += dt;
+      if (this.tierRing.t > 0.55) this.tierRing = null;
+    }
   }
 
   draw(dt) {
@@ -1618,7 +1773,7 @@ if (shotName) {
     last = now;
 
     if (game.focusPaused) {
-      if (input.takeClick() || input.take('Space') || input.take('Enter')) game.focusPaused = false;
+      if (input.takeClick() || input.take('Space') || input.take('Enter') || input.take('Dodge') || input.take('Tap')) game.focusPaused = false;
       game.draw(delta);
       requestAnimationFrame(frame);
       return;
@@ -1632,13 +1787,14 @@ if (shotName) {
     if (game.state === 'title' && (input.take('Space') || input.take('Enter') || input.takeClick())) {
       game.sound.unlock();
       game.start();
-    } else if (resultsReady && (input.take('KeyR') || input.take('Space') || input.takeClick())) {
+    } else if (resultsReady && (input.take('KeyR') || input.take('Space') || input.takeClick() || input.take('Tap'))) {
       runSeed += 1;
       game.newRun(runSeed);
       game.sound.unlock();
       game.start();
     } else if (game.state === 'playing') {
-      if (input.take('Space')) game.queuedFlash = true;
+      if (input.take('Space') || input.take('Dodge')) game.queuedFlash = true; // P1-5: right-click / second finger
+      input.take('Tap'); // a steering finger landing is not an action in play
       if (input.takeClick()) {
         // Landed clicks raise the bet (P1-4); airborne clicks dodge.
         if (game.tutorial === 'done' && game.fly.landedOn) game.placeBet();

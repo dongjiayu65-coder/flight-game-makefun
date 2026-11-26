@@ -27,7 +27,6 @@ export class Fly {
     this.flashTo = { x, y };
     this.cooldownT = 0;
     this.iframesT = 0;
-    this.bufferedT = -1; // >= 0: a press waiting out the cooldown
     this.justFlashed = false;
     // Squash and post-hit invulnerability.
     this.squashT = 0;
@@ -74,12 +73,6 @@ export class Fly {
     return true;
   }
 
-  // A press that arrived early: remember it briefly (spec: 100ms
-  // input buffer); update() fires it the moment the cooldown ends.
-  bufferFlash() {
-    this.bufferedT = 0;
-  }
-
   squash() {
     this.squashT = 0.4;
     this.invulnT = 1.2;
@@ -99,10 +92,6 @@ export class Fly {
     this.cooldownT -= dt;
     this.iframesT -= dt;
     this.invulnT -= dt;
-    if (this.bufferedT >= 0) {
-      this.bufferedT += dt;
-      if (this.bufferedT > FLY.flashBuffer) this.bufferedT = -1;
-    }
     if (this.squashT > 0) {
       this.squashT -= dt;
       this.wingPhase += dt * 4;
@@ -110,10 +99,10 @@ export class Fly {
     }
     if (mouse) this.target = { x: mouse.x, y: mouse.y };
 
-    // A buffered press fires the instant the cooldown clears.
+    // (P1-2: the 100ms input buffer lives in Game.handleFlash now —
+    // one buffer, with an expiry.)
     if (wantsFlash && this.flashReady) {
       this.startFlash(wantsFlash.x, wantsFlash.y, wantsFlash.cooldown);
-      this.bufferedT = -1;
     }
 
     if (this.flashing) {

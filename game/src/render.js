@@ -6,7 +6,7 @@
 // sticker heads along the table edges; the fly wears a white locator
 // ring so it can never get lost on a busy table.
 
-import { PALETTE, VIEW } from './config.js';
+import { PALETTE, VIEW, MOOD } from './config.js';
 import { warnProgress, grandpaStalled } from './humans.js';
 import { spritesReady, bgReady, drawBgImage, drawSprite, drawHead, drawPalm } from './sprites.js';
 
@@ -19,6 +19,19 @@ const OUTLINE = PALETTE.ink;
 // context, so every radius, zone and rating in the game logic
 // keeps using headR untouched.
 const HEAD_DRAW = 1.15;
+
+// Decal anchors per painted head, in units of the head radius R
+// (design P1, decal no-go zone). Eye line and span set the X-eyes;
+// the cheek point is low and outside the eye band; soup sits on the
+// crown (Mom: on the bun — "Soup Bun") and runs down the hair.
+// Measured by eye off the S1 atlas frames — check with the debug
+// overlay and nudge here, nowhere else.
+const DECAL = {
+  Dad: { eyeY: -0.06, eyeSpan: 1.05, cheekX: -0.46, cheekY: 0.34, soupY: -0.72, soupW: 1.35 },
+  Mom: { eyeY: -0.02, eyeSpan: 1.0, cheekX: -0.44, cheekY: 0.36, soupY: -1.02, soupW: 1.2 },
+  Grandpa: { eyeY: -0.1, eyeSpan: 1.05, cheekX: -0.48, cheekY: 0.3, soupY: -0.78, soupW: 1.3 },
+  Timmy: { eyeY: 0.02, eyeSpan: 1.0, cheekX: -0.44, cheekY: 0.38, soupY: -0.68, soupW: 1.25 },
+};
 
 function circle(ctx, x, y, r, fill, outline = true) {
   ctx.beginPath();
@@ -100,11 +113,15 @@ export class Renderer {
     this.drawCrumbs(game, t);
     this.drawHover(game, t);
     this.drawHumans(game, t);
-    this.drawLamp(game, t);
+    // Design #4: the chandelier sprite is gone (it hung on Mom's head
+    // and read as a layer bug). Only its light pool remains, drawn in
+    // drawRoom; ROOM.lamp stays as a logic point for E4 / the drop.
+    if (game.table.lampDropped) this.drawLamp(game, t);
     this.drawDog(game, t);
     this.drawChainPreview(game, t);
     this.drawAttacks(game, t);
     this.drawFly(game, t);
+    this.drawTierRing(game);
     this.drawParticles(game);
     this.drawTexts(game);
     this.drawMissBar(game);
@@ -158,7 +175,7 @@ export class Renderer {
       const lamp = game.table.lamp;
       const sway = game.table.lampSwingT > 0 ? Math.sin(t * 9) * 16 * (game.table.lampSwingT / 3) : 0;
       const pool = ctx.createRadialGradient(lamp.x + sway, lamp.y, 60, lamp.x + sway, lamp.y, 520);
-      pool.addColorStop(0, 'rgba(255,205,110,0.07)');
+      pool.addColorStop(0, `rgba(255,205,110,${game.table.lampSwingT > 0 ? 0.16 : 0.07})`); // sway reads without a fixture
       pool.addColorStop(1, 'rgba(255,205,110,0)');
       ctx.fillStyle = pool;
       ctx.fillRect(0, 0, VIEW.width, VIEW.height);
@@ -851,7 +868,29 @@ export class Renderer {
     const bob = Math.sin(t * 1.6 + idx * 1.9) * 2;
     ctx.save();
     ctx.translate(x, y + bob);
-    ctx.scale(HEAD_DRAW, HEAD_DRAW); // v5: presence only — see HEAD_DRAW
+    // Aiming (design P1): the attacker leans 8 degrees toward the fly,
+    // swells to 1.1x and wears an outline in their shirt colour, so
+    // "who is about to swing" reads even when the whole room is angry.
+    let lean = 0;
+    let swell = 1;
+    if (h.aiming) {
+      const a = Math.atan2(game.fly.y - y, game.fly.x - x);
+      lean = Math.max(-0.14, Math.min(0.14, Math.cos(a) * 0.14));
+      swell = 1.1;
+    }
+    // Frame-change squash-bounce: 1.15x and back in 0.12s.
+    const pop = h.popT > 0 ? 1 + Math.sin((1 - h.popT / MOOD.popTime) * Math.PI) * 0.15 : 1;
+    ctx.rotate(lean);
+    ctx.scale(HEAD_DRAW * swell * pop, HEAD_DRAW * swell * pop); // v5: presence only — see HEAD_DRAW
+    if (h.aiming) {
+      ctx.strokeStyle = h.look.clothes;
+      ctx.lineWidth = 5;
+      ctx.globalAlpha = 0.75 + Math.sin(t * 14) * 0.25;
+      ctx.beginPath();
+      ctx.arc(0, 0, R + 8, 0, TAU);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
     // Shoulders in the shirt colour, tucked behind the head.
     ctx.fillStyle = h.look.clothes;
     ctx.beginPath();
@@ -867,15 +906,25 @@ export class Renderer {
     // wide, with the X-eyes decal over it (the plan's recipe).
     if (spritesReady()) {
       const key = h.expression === 'slapped' ? 'scared' : h.expression;
-      const drawn = drawHead(ctx, `${h.name.toLowerCase()}-${key}`, 0, 0, R, {
-        sx: h.expression === 'slapped' ? 1.28 : 1,
-        sy: h.expression === 'slapped' ? 0.94 : 1,
-      });
+      // Slapped: 1.3x wide on the hit, springing back to 1.0 over 0.4s
+      // (design P1) — the stretch is visibly an event, not a pose.
+      const sk = h.slapT > 0 ? h.slapT / MOOD.slapStretchTime : 0;
+      const sx = 1 + 0.3 * sk * sk;
+      const sy = 1 - 0.08 * sk * sk;
+      const drawn = drawHead(ctx, `${h.name.toLowerCase()}-${key}`, 0, 0, R, { sx, sy });
       if (drawn) {
-        if (h.expression === 'slapped') drawSprite(ctx, 'xeyes', 0, -R * 0.08, { w: 54 });
-        if (h.palmPrint) drawSprite(ctx, 'palmprint', R * 0.34, R * 0.08, { w: 38, rot: 0.5 });
-        if (h.soupFace) drawSprite(ctx, 'soupface', 0, -R * 0.12, { w: 74 });
+        // Decal no-go zone (design P1): nothing is stamped over the
+        // brow/eye band, so the expression always reads. Soup goes on
+        // the bun / crown and runs down the hair, the handprint sits
+        // low on the cheek, the X-eyes cover BOTH eyes on the eye line.
+        const z = DECAL[h.name] ?? DECAL.Dad;
+        if (h.expression === 'slapped') {
+          drawSprite(ctx, 'xeyes', 0, R * z.eyeY, { w: R * z.eyeSpan * sx });
+        }
+        if (h.palmPrint) drawSprite(ctx, 'palmprint', R * z.cheekX * sx, R * z.cheekY, { w: 34, rot: -0.35 });
+        if (h.soupFace) drawSprite(ctx, 'soupface', 0, R * z.soupY, { w: R * z.soupW });
         if (h.hatKind) this.drawProp(game, h.hatKind, 0, -R - 4, 0.3, t);
+        if (h.steam || (h.expression === 'angry' && h.angryT > 0)) this.drawSteam(ctx, R, t, idx);
         ctx.restore();
         return;
       }
@@ -965,6 +1014,42 @@ export class Renderer {
     }
     // Dinner, worn as a hat (E8).
     if (h.hatKind) this.drawProp(game, h.hatKind, 0, -R - 4, 0.3, t);
+    ctx.restore();
+  }
+
+  // Two puffs of steam off the crown (angry tier from 55s, provoked).
+  drawSteam(ctx, R, t, idx) {
+    for (const s of [-1, 1]) {
+      const ph = (t * 1.8 + idx * 0.7 + (s > 0 ? 0.5 : 0)) % 1;
+      const a = ph < 0.8 ? 0.85 : 0.85 * (1 - (ph - 0.8) / 0.2);
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.translate(s * R * 0.42, -R * 0.95 - ph * 22);
+      ctx.scale(0.6 + ph * 0.6, 0.6 + ph * 0.6);
+      circle(ctx, 0, 0, 8, '#FFFFFF');
+      circle(ctx, s * 7, -5, 6, '#FFFFFF');
+      ctx.restore();
+    }
+  }
+
+  // Design P1: the evolution ring when the fly changes form.
+  drawTierRing(game) {
+    const tr = game.tierRing;
+    if (!tr) return;
+    const ctx = this.ctx;
+    const k = tr.t / 0.55;
+    ctx.save();
+    ctx.globalAlpha = 1 - k;
+    ctx.strokeStyle = tr.color;
+    ctx.lineWidth = 10 * (1 - k) + 2;
+    ctx.beginPath();
+    ctx.arc(game.fly.x, game.fly.y, 24 + k * 150, 0, TAU);
+    ctx.stroke();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(game.fly.x, game.fly.y, 14 + k * 110, 0, TAU);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -1126,6 +1211,9 @@ export class Renderer {
 
   // --- lamp, dog, attacks, fly ------------------------------------------------
 
+  // Only the fallen chandelier is drawn (design #4); the hanging
+  // fixture below is kept for the no-sprite fallback but is no
+  // longer called while it hangs.
   drawLamp(game, t) {
     const ctx = this.ctx;
     const lamp = game.table.lamp;
@@ -1227,6 +1315,13 @@ export class Renderer {
   drawWarning(game, atk, t) {
     const ctx = this.ctx;
     const remainMs = (atk.dur - atk.t) * 1000;
+    // P0-3 follow-up: a finale companion palm draws no ring of its
+    // own — it is its owner's hand reaching in from that seat,
+    // closing on the cake as the main ring tightens.
+    if (atk.decor) {
+      this.drawReachingHand(game, atk, t);
+      return;
+    }
     if (atk.kind === 'spray') {
       ctx.save();
       ctx.strokeStyle = 'rgba(140,220,120,0.85)';
@@ -1335,6 +1430,29 @@ export class Renderer {
     ctx.fill();
   }
 
+  // A hand travelling from its owner's seat to the target, 25% of the
+  // way at the start of the warning, 85% at impact (the slam frame
+  // draws all four hands on the cake).
+  drawReachingHand(game, atk, t) {
+    const ctx = this.ctx;
+    const h = atk.owner;
+    const k = Math.min(1, atk.t / atk.dur);
+    const ease = k * k * (3 - 2 * k);
+    const f = 0.25 + 0.6 * ease;
+    const hx = h.x + (atk.x - h.x) * f;
+    const hy = h.y + (atk.y - h.y) * f;
+    const a = Math.atan2(atk.y - h.y, atk.x - h.x);
+    // Its shadow lands ahead of it on the cloth.
+    ctx.fillStyle = `rgba(20,8,24,${0.08 + 0.12 * k})`;
+    ctx.beginPath();
+    ctx.ellipse(hx + Math.cos(a) * 18, hy + Math.sin(a) * 18 + 10, 40, 26, a, 0, TAU);
+    ctx.fill();
+    const size = 110 + 30 * ease;
+    if (!drawPalm(ctx, hx, hy, size, a + Math.PI / 2, h.look.clothes)) {
+      this.handPath(ctx, hx, hy, 1.1 + 0.3 * ease, a + Math.PI / 2);
+    }
+  }
+
   handPath(ctx, x, y, s, rot) {
     ctx.save();
     ctx.translate(x, y);
@@ -1366,6 +1484,8 @@ export class Renderer {
 
   drawImpactHand(game, atk, t) {
     const ctx = this.ctx;
+    // The main finale slam already draws all four hands below.
+    if (atk.decor) return;
     const pop = 1 + Math.max(0, 0.14 - atk.t) * 2.2;
     if (atk.finale) {
       // All four hands, one from each side of the table.
