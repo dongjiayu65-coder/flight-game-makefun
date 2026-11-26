@@ -1,17 +1,222 @@
-// hud.js — the frame around the game, per spec 1.4/2.10/2.11:
-// hearts top-left, a candle-style timer top-centre, the score in
-// butter yellow top-right, the combo riding on the fly's shoulder,
-// the Party Ruined meter along the bottom, centre announcements,
-// the CHAIN banner, and the title / results screens (rank stamp,
-// caption, one "so close" line, the 12-cell disaster log).
+// hud.js — the screen-fixed layer: hearts and the PARTY RUINED
+// meter in the top-left (clear of Mom's face), the clock up top,
+// the score top-right, announcements, and the title / results
+// overlays including the family photo. Constructed with the
+// canvas context; draw(game, dt) is called once a frame.
 
-import { PALETTE, VIEW, GAME } from './config.js';
-import { GALLERY } from './copy.js';
-import { spritesReady, drawSprite } from './sprites.js';
+import { GAME, VIEW } from './config.js';
 
-const TAU = Math.PI * 2;
-const OUTLINE = PALETTE.ink;
-const FONT = '"Baloo 2","Trebuchet MS",sans-serif';
+const INK = '#2B1B2E';
+const FONT = '"Baloo 2", system-ui, sans-serif';
+
+export class Hud {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.notes = []; // { text, t, dur }
+    this.photoClean = new Image();
+    this.photoClean.src = 'assets/photo-clean.jpg';
+    this.photoRuined = new Image();
+    this.photoRuined.src = 'assets/photo-ruined.jpg';
+  }
+
+  announce(text, dur = 1.6) {
+    this.notes.push({ text, t: 0, dur });
+    if (this.notes.length > 2) this.notes.shift();
+  }
+
+  draw(game, dt) {
+    const ctx = this.ctx;
+    for (const n of this.notes) n.t += dt;
+    this.notes = this.notes.filter((n) => n.t < n.dur);
+    if (game.state === 'title') {
+      this.drawTitle(ctx, game);
+      return;
+    }
+    this.drawMeters(ctx, game);
+    this.drawNotes(ctx);
+    if (game.state === 'results') this.drawResults(ctx, game);
+  }
+
+  drawMeters(ctx, game) {
+    // Hearts.
+    for (let i = 0; i < GAME.hp; i++) {
+      const x = 30 + i * 38;
+      const y = 30;
+      ctx.save();
+      ctx.globalAlpha = i < game.hp ? 1 : 0.22;
+      ctx.fillStyle = '#FF5A4E';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x, y + 10);
+      ctx.bezierCurveTo(x - 15, y - 8, x - 6, y - 16, x, y - 6);
+      ctx.bezierCurveTo(x + 6, y - 16, x + 15, y - 8, x, y + 10);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+    // PARTY RUINED meter, top-left under the hearts.
+    const ruined = Math.min(1, game.chaosTotal / GAME.destructionFull);
+    const bx = 16;
+    const by = 52;
+    const bw = 216;
+    ctx.fillStyle = 'rgba(26,15,34,0.55)';
+    roundRect(ctx, bx - 4, by - 4, bw + 8, 30, 8);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    roundRect(ctx, bx, by, bw, 13, 6);
+    ctx.fill();
+    if (ruined > 0) {
+      ctx.fillStyle = '#FF3FA4';
+      roundRect(ctx, bx, by, bw * ruined, 13, 6);
+      ctx.fill();
+    }
+    ctx.font = `800 13px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(`PARTY RUINED ${Math.round(ruined * 100)}%`, bx + 2, by + 27);
+
+    // Clock, top-centre.
+    const remain = Math.max(0, GAME.duration - game.elapsed);
+    const cw = 340;
+    const cx = VIEW.width / 2 - cw / 2;
+    ctx.fillStyle = 'rgba(26,15,34,0.55)';
+    roundRect(ctx, cx - 4, 8, cw + 8, 22, 8);
+    ctx.fill();
+    ctx.fillStyle = remain <= 10 ? '#FF5A4E' : '#FFC94A';
+    if (game.tutorial === 'done') {
+      roundRect(ctx, cx, 12, cw * (remain / GAME.duration), 14, 6);
+      ctx.fill();
+    }
+    ctx.font = `800 15px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(game.tutorial === 'done' ? `${Math.ceil(remain)}s` : 'TUTORIAL', VIEW.width / 2, 46);
+
+    // Score, top-right.
+    ctx.textAlign = 'right';
+    ctx.font = `800 15px ${FONT}`;
+    ctx.fillStyle = '#FFE9A3';
+    ctx.fillText('SCORE', VIEW.width - 18, 24);
+    ctx.font = `800 34px ${FONT}`;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = INK;
+    ctx.strokeText(String(game.score), VIEW.width - 18, 58);
+    ctx.fillStyle = '#FFC94A';
+    ctx.fillText(String(game.score), VIEW.width - 18, 58);
+    ctx.textAlign = 'left';
+  }
+
+  drawNotes(ctx) {
+    const n = this.notes[0];
+    if (!n) return;
+    const pop = n.t < 0.15 ? 0.6 + (n.t / 0.15) * 0.4 : 1;
+    const fade = n.t > n.dur - 0.3 ? Math.max(0, (n.dur - n.t) / 0.3) : 1;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.translate(VIEW.width / 2, 120);
+    ctx.scale(pop, pop);
+    ctx.font = `800 44px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = INK;
+    ctx.strokeText(n.text, 0, 0);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(n.text, 0, 0);
+    ctx.restore();
+  }
+
+  drawTitle(ctx, game) {
+    ctx.fillStyle = 'rgba(26,15,34,0.45)';
+    ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+    ctx.textAlign = 'center';
+    ctx.font = `800 64px ${FONT}`;
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = INK;
+    ctx.fillStyle = '#FFC94A';
+    ['ONE FLY RUINS', 'A BIRTHDAY PARTY'].forEach((line, i) => {
+      const y = 268 + i * 68;
+      ctx.strokeText(line, VIEW.width / 2, y);
+      ctx.fillText(line, VIEW.width / 2, y);
+    });
+    ctx.font = `800 24px ${FONT}`;
+    ctx.lineWidth = 6;
+    ctx.fillStyle = '#FFFFFF';
+    const sub = 'Taunt the family. Dodge at the last instant. Ruin everything.';
+    ctx.strokeText(sub, VIEW.width / 2, 428);
+    ctx.fillText(sub, VIEW.width / 2, 428);
+    ctx.textAlign = 'left';
+  }
+
+  drawResults(ctx, game) {
+    ctx.fillStyle = 'rgba(26,15,34,0.55)';
+    ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+    const pw = 620;
+    const ph = 480;
+    const px = VIEW.width / 2 - pw / 2;
+    const py = 120;
+    ctx.fillStyle = '#FFF8EA';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 4;
+    roundRect(ctx, px, py, pw, ph, 18);
+    ctx.fill();
+    ctx.stroke();
+
+    const rank = game.rank;
+    const ruined = Math.min(1, game.chaosTotal / GAME.destructionFull);
+    ctx.textAlign = 'center';
+    ctx.font = `800 38px ${FONT}`;
+    ctx.fillStyle = INK;
+    ctx.fillText(rank && rank.id === 'C' ? 'PARTY... FINE' : 'PARTY RUINED', VIEW.width / 2, py + 50);
+
+    // The family photo: the ruined print once the party is at
+    // least half destroyed, the clean one otherwise.
+    const img = ruined >= 0.5 ? this.photoRuined : this.photoClean;
+    if (img && img.complete && img.naturalWidth > 0) {
+      const iw = 300;
+      const ih = (iw * img.naturalHeight) / img.naturalWidth;
+      ctx.drawImage(img, VIEW.width / 2 - iw / 2, py + 66, iw, ih);
+    }
+
+    if (rank) {
+      ctx.save();
+      ctx.translate(px + pw - 104, py + 62);
+      ctx.rotate(-0.22);
+      ctx.font = `800 24px ${FONT}`;
+      const label = `${rank.id} — ${rank.stamp}`;
+      const w = ctx.measureText(label).width + 26;
+      ctx.strokeStyle = '#FF5A4E';
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(-w / 2, -23, w, 38);
+      ctx.fillStyle = '#FF5A4E';
+      ctx.fillText(label, 0, 5);
+      ctx.restore();
+    }
+
+    ctx.font = `800 21px ${FONT}`;
+    ctx.fillStyle = INK;
+    const rows = [
+      `Score  ${game.score}`,
+      `Longest Chain  x${game.longestChain ?? 0}      Party Destroyed  ${Math.round(ruined * 100)}%`,
+    ];
+    rows.forEach((line, i) => ctx.fillText(line, VIEW.width / 2, py + 300 + i * 34));
+
+    // The "so close" line, whenever a higher rank exists.
+    if (rank) {
+      const idx = GAME.ranks.indexOf(rank);
+      if (idx > 0) {
+        const next = GAME.ranks[idx - 1];
+        ctx.font = `800 20px ${FONT}`;
+        ctx.fillStyle = '#FF3FA4';
+        ctx.fillText(`Only ${next.min - game.score} pts from ${next.id} rank!`, VIEW.width / 2, py + 386);
+      }
+    }
+    ctx.font = `800 19px ${FONT}`;
+    ctx.fillStyle = '#5A4632';
+    ctx.fillText('BUZZ AGAIN  [R]', VIEW.width / 2, py + 436);
+    ctx.textAlign = 'left';
+  }
+}
 
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -21,770 +226,4 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
-}
-
-export class Hud {
-  constructor(ctx) {
-    this.ctx = ctx;
-    this.announceText = '';
-    this.announceT = 0;
-    this.announceDur = 1;
-    // The family photo (art set F4 clean / F3 ruined, approved
-    // 2026-11-26): drawn on the results screen, with this run's
-    // damage overlaid on the clean print.
-    this.photoClean = new Image();
-    this.photoClean.src = 'assets/photo-clean.jpg';
-    this.photoRuined = new Image();
-    this.photoRuined.src = 'assets/photo-ruined.jpg';
-  }
-
-  announce(text, holdSeconds = 2) {
-    if (!text) return;
-    this.announceText = text;
-    this.announceT = holdSeconds;
-    this.announceDur = holdSeconds;
-  }
-
-  draw(game, dt) {
-    if (this.announceT > 0) this.announceT -= dt;
-    if (game.state === 'title') return this.drawTitle(game);
-    if (game.state === 'results') return this.drawResults(game);
-    this.drawHud(game, dt);
-  }
-
-  slideK(game, delay) {
-    const k = Math.min(1, Math.max(0, (game.hudSlideT - delay) / 0.4));
-    return k * k * (3 - 2 * k);
-  }
-
-  drawHud(game, dt) {
-    const ctx = this.ctx;
-    const t = game.time;
-    // Hearts, top-left.
-    const hk = this.slideK(game, 0);
-    if (hk > 0) {
-      ctx.save();
-      ctx.translate(0, -46 * (1 - hk));
-      for (let i = 0; i < GAME.hp; i++) {
-        const x = 44 + i * 44;
-        const y = 40;
-        const alive = i < game.hp;
-        ctx.fillStyle = alive ? PALETTE.tomato : 'rgba(43,27,46,0.55)';
-        ctx.strokeStyle = OUTLINE;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(x, y + 11);
-        ctx.bezierCurveTo(x - 17, y - 4, x - 9, y - 17, x, y - 7);
-        ctx.bezierCurveTo(x + 9, y - 17, x + 17, y - 4, x, y + 11);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-    // The candle timer (design #4): moved from top-centre — where it
-    // sat on Mom's bun and her steam — to the left column, under the
-    // Party Ruined meter.
-    const tk = this.slideK(game, 0.15);
-    if (tk > 0) {
-      ctx.save();
-      ctx.translate(-60 * (1 - tk), 0);
-      const w = 240;
-      const x = 30;
-      const y = 150;
-      const left = Math.max(0, 1 - game.elapsed / GAME.duration);
-      ctx.fillStyle = 'rgba(43,27,46,0.6)';
-      roundRect(ctx, x - 6, y - 6, w + 12, 26, 10);
-      ctx.fill();
-      ctx.fillStyle = '#FFF6E8';
-      roundRect(ctx, x, y, w, 14, 7);
-      ctx.fill();
-      ctx.fillStyle = game.elapsed > 75 ? PALETTE.tomato : PALETTE.butter;
-      if (left > 0.01) {
-        roundRect(ctx, x, y, w * left, 14, 7);
-        ctx.fill();
-      }
-      // The flame rides the melt line.
-      const fx = x + w * left;
-      const fl = 1 + Math.sin(t * 12) * 0.22;
-      ctx.fillStyle = PALETTE.butter;
-      ctx.beginPath();
-      ctx.ellipse(fx, y - 4, 4.6 * fl, 7.6 * fl, 0, 0, TAU);
-      ctx.fill();
-      ctx.fillStyle = '#FFF3C4';
-      ctx.beginPath();
-      ctx.ellipse(fx, y - 3, 2.2 * fl, 4 * fl, 0, 0, TAU);
-      ctx.fill();
-      ctx.font = `800 19px ${FONT}`;
-      ctx.textAlign = 'left';
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = OUTLINE;
-      const label = game.tutorial !== 'done' ? 'WARM-UP' : `${Math.ceil(GAME.duration - game.elapsed)}s`;
-      ctx.strokeText(label, x + w + 14, y + 13);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(label, x + w + 14, y + 13);
-      ctx.restore();
-    }
-    // Score, top-right.
-    const sk = this.slideK(game, 0.3);
-    if (sk > 0) {
-      ctx.save();
-      ctx.translate(0, -56 * (1 - sk));
-      ctx.font = `800 40px ${FONT}`;
-      ctx.textAlign = 'right';
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText(String(game.score), VIEW.width - 30, 52);
-      ctx.fillStyle = PALETTE.butter;
-      ctx.fillText(String(game.score), VIEW.width - 30, 52);
-      if (game.bestScore > 0) {
-        ctx.font = `700 15px ${FONT}`;
-        ctx.lineWidth = 4;
-        ctx.strokeText(`BEST ${game.bestScore}`, VIEW.width - 30, 76);
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.fillText(`BEST ${game.bestScore}`, VIEW.width - 30, 76);
-      }
-      ctx.restore();
-    }
-    // Party Ruined meter, top-left under the hearts (v5: the
-    // bottom-centre spot sat squarely on Dad's head).
-    const dk = this.slideK(game, 0.45);
-    if (dk > 0) {
-      ctx.save();
-      ctx.translate(0, -46 * (1 - dk));
-      const w = 240;
-      const x = 30;
-      const y = 94;
-      ctx.font = `800 14px ${FONT}`;
-      ctx.textAlign = 'left';
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText('PARTY RUINED', x, y - 8);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText('PARTY RUINED', x, y - 8);
-      ctx.fillStyle = 'rgba(43,27,46,0.6)';
-      roundRect(ctx, x - 4, y + 2, w + 8, 16, 8);
-      ctx.fill();
-      const pct = Math.min(1, game.destruction01);
-      if (pct > 0.01) {
-        ctx.fillStyle = pct >= 1 ? PALETTE.magenta : PALETTE.tomato;
-        roundRect(ctx, x, y + 5, w * pct, 10, 5);
-        ctx.fill();
-      }
-      ctx.font = `800 15px ${FONT}`;
-      ctx.fillStyle = PALETTE.butter;
-      ctx.fillText(`${Math.round(game.destruction01 * 100)}%`, x + w + 14, y + 14);
-      ctx.restore();
-    }
-    // The combo rides on the fly (spec 1.4) — design #5: big hot
-    // magenta with a thick ink outline and a white inner edge, 34px
-    // and up, bumping on every gain, lifted above-right of the fly so
-    // it never sits on the prop underneath. Grey + shake while it
-    // decays. The tier name sits under the number from GOLDEN up.
-    if (game.combo >= 2) {
-      const decaying = game.clock > game.decayDeadline;
-      if (game.combo !== this.lastCombo) {
-        if (game.combo > (this.lastCombo ?? 0)) this.comboBumpT = 0.18;
-        this.lastCombo = game.combo;
-      }
-      this.comboBumpT = Math.max(0, (this.comboBumpT ?? 0) - dt);
-      const bump = 1 + (this.comboBumpT / 0.18) * 0.35;
-      const size = 34 + Math.min(20, game.combo);
-      let cx = game.fly.x + 40;
-      let cy = game.fly.y - 40;
-      if (cx > VIEW.width - 60) cx = game.fly.x - 70;
-      if (cy < 40) cy = game.fly.y + 56;
-      ctx.save();
-      ctx.translate(cx, cy);
-      if (decaying) ctx.translate(Math.sin(t * 30) * 2, 0);
-      ctx.rotate(-0.08);
-      ctx.scale(bump, bump);
-      ctx.font = `800 ${size}px ${FONT}`;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 9;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText(`x${game.combo}`, 0, 0);
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.strokeText(`x${game.combo}`, 0, 0);
-      ctx.fillStyle = decaying ? '#9a8fa8' : PALETTE.magenta;
-      ctx.fillText(`x${game.combo}`, 0, 0);
-      const tierName = { gold: 'GOLDEN', flame: 'ON FIRE', rainbow: 'RAINBOW' }[game.tier.id];
-      if (tierName) {
-        ctx.font = `800 15px ${FONT}`;
-        ctx.lineWidth = 5;
-        ctx.strokeStyle = OUTLINE;
-        ctx.strokeText(tierName, 2, size * 0.62);
-        ctx.fillStyle = { gold: PALETTE.butter, flame: PALETTE.tomato, rainbow: `hsl(${(t * 240) % 360},90%,65%)` }[game.tier.id];
-        ctx.fillText(tierName, 2, size * 0.62);
-      }
-      ctx.restore();
-    } else {
-      this.lastCombo = game.combo;
-    }
-    // Design #2: the controls, as icons, for 3s after the opening —
-    // replacing the page's two-line text wall. Mouse = fly, SPACE =
-    // dodge, CLICK (while landed) = raise the bet.
-    if (game.hintsT > 0) this.drawControlIcons(ctx, Math.min(1, game.hintsT / 0.5), t);
-    // CHAIN banner, fixed under the timer (spec 1.5).
-    if (game.chainPop) {
-      game.chainPop.t += dt;
-      const cp = game.chainPop;
-      if (cp.t > 1.1) game.chainPop = null;
-      else {
-        const subs = { 3: 'Chaos!', 4: 'Total chaos!', 5: 'DOMINO DINNER!' };
-        ctx.save();
-        ctx.translate(VIEW.width / 2, 236); // design #4: below Mom, not on her
-        const pop = cp.t < 0.12 ? 0.7 + (cp.t / 0.12) * 0.3 : 1;
-        ctx.scale(pop, pop);
-        ctx.globalAlpha = cp.t > 0.85 ? 1 - (cp.t - 0.85) / 0.25 : 1;
-        ctx.font = `800 ${48 + cp.n * 4}px ${FONT}`;
-        ctx.textAlign = 'center';
-        ctx.lineWidth = 7;
-        ctx.strokeStyle = OUTLINE;
-        ctx.strokeText(`CHAIN x${cp.n}`, 0, 0);
-        ctx.fillStyle = PALETTE.butter;
-        ctx.fillText(`CHAIN x${cp.n}`, 0, 0);
-        if (subs[cp.n]) {
-          ctx.font = `800 22px ${FONT}`;
-          ctx.lineWidth = 5;
-          ctx.strokeText(subs[cp.n], 0, 32);
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillText(subs[cp.n], 0, 32);
-        }
-        ctx.restore();
-      }
-    }
-    // Announcements.
-    if (this.announceT > 0 && this.announceText) {
-      const a = Math.min(1, this.announceT / 0.3, (this.announceDur - this.announceT) / 0.15 + 0.2);
-      ctx.save();
-      ctx.globalAlpha = Math.max(0, a);
-      ctx.font = `800 34px ${FONT}`;
-      ctx.textAlign = 'center';
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText(this.announceText, VIEW.width / 2, 300); // design #4: clear of Mom
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(this.announceText, VIEW.width / 2, 300);
-      ctx.restore();
-    }
-    // (Design #2: the soup-step text direction is gone — the ghost
-    // path and the mouse icon teach it without words, spec 3.5.)
-    if (game.tutorial === 'script' && game.tutPhase === 'soup') {
-      this.drawMouseIcon(ctx, VIEW.width - 92, VIEW.height - 92, t, 1);
-    }
-    if (game.paused) {
-      // Design #2: the pause page is where the full rules live now.
-      ctx.fillStyle = 'rgba(11,6,18,0.72)';
-      ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-      ctx.font = `800 44px ${FONT}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'alphabetic';
-      ctx.lineWidth = 7;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText('PAUSED', VIEW.width / 2, 200);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText('PAUSED', VIEW.width / 2, 200);
-      const rows = [
-        ['MOUSE', 'Fly. Land on food, faces, anything — somebody WILL swing.'],
-        ['SPACE', 'Dodge (or right-click / second finger). Later = bigger grade.'],
-        ['CLICK', 'While landed: raise the bet. Bigger grade, faster slap.'],
-        ['CHAIN', 'Drag the hand onto soup, forks, heads — wreck the table.'],
-        ['0:10', 'The cake. Land on it. All four hands.'],
-        ['R / P', 'Restart / pause'],
-      ];
-      rows.forEach(([k, v], i) => {
-        const y = 270 + i * 46;
-        ctx.font = `800 22px ${FONT}`;
-        ctx.textAlign = 'right';
-        ctx.lineWidth = 5;
-        ctx.strokeText(k, 420, y);
-        ctx.fillStyle = PALETTE.butter;
-        ctx.fillText(k, 420, y);
-        ctx.font = `700 21px ${FONT}`;
-        ctx.textAlign = 'left';
-        ctx.strokeText(v, 446, y);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillText(v, 446, y);
-      });
-      ctx.font = `800 20px ${FONT}`;
-      ctx.textAlign = 'center';
-      ctx.strokeText('Press P to resume', VIEW.width / 2, 600);
-      ctx.fillStyle = PALETTE.cyan;
-      ctx.fillText('Press P to resume', VIEW.width / 2, 600);
-    }
-  }
-
-  // Design #2 helpers: wordless control icons.
-  drawMouseIcon(ctx, x, y, t, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    const sway = Math.sin(t * 3) * 10;
-    ctx.translate(x + sway, y);
-    ctx.fillStyle = '#FFFFFF';
-    roundRect(ctx, -16, -24, 32, 48, 16);
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = OUTLINE;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, -24);
-    ctx.lineTo(0, -6);
-    ctx.stroke();
-    // motion arrows
-    ctx.strokeStyle = PALETTE.cyan;
-    ctx.lineWidth = 3;
-    for (const s of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(s * 26, 0);
-      ctx.lineTo(s * 38, 0);
-      ctx.lineTo(s * 32, -6);
-      ctx.moveTo(s * 38, 0);
-      ctx.lineTo(s * 32, 6);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  drawKeyIcon(ctx, x, y, w, label, fill, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = '#B8352C';
-    roundRect(ctx, x - w / 2, y - 16, w, 38, 9);
-    ctx.fill();
-    ctx.fillStyle = fill;
-    roundRect(ctx, x - w / 2, y - 20, w, 34, 9);
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = OUTLINE;
-    ctx.stroke();
-    ctx.font = `800 17px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = OUTLINE;
-    ctx.fillText(label, x, y - 3);
-    ctx.restore();
-  }
-
-  drawControlIcons(ctx, alpha, t) {
-    const y = VIEW.height - 64;
-    const cx = VIEW.width / 2;
-    ctx.save();
-    ctx.fillStyle = `rgba(26,13,32,${0.7 * alpha})`;
-    roundRect(ctx, cx - 250, y - 40, 500, 76, 18);
-    ctx.fill();
-    ctx.restore();
-    this.drawMouseIcon(ctx, cx - 170, y, t, alpha);
-    this.drawKeyIcon(ctx, cx, y, 120, 'SPACE', '#FFFFFF', alpha);
-    this.drawKeyIcon(ctx, cx + 170, y, 92, 'CLICK', PALETTE.butter, alpha);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.font = `800 13px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = OUTLINE;
-    for (const [lx, txt] of [[cx - 170, 'FLY'], [cx, 'DODGE'], [cx + 170, 'BET']]) {
-      ctx.strokeText(txt, lx, y + 30);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(txt, lx, y + 30);
-    }
-    ctx.restore();
-  }
-
-  drawTitle(game) {
-    const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(20,10,28,0.62)';
-    ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-    ctx.textAlign = 'center';
-    ctx.save();
-    ctx.translate(VIEW.width / 2, 218);
-    ctx.rotate(-0.02);
-    ctx.font = `800 64px ${FONT}`;
-    ctx.lineWidth = 10;
-    ctx.strokeStyle = OUTLINE;
-    ctx.strokeText('ONE FLY RUINS A', 0, 0);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillText('ONE FLY RUINS A', 0, 0);
-    ctx.strokeText('BIRTHDAY PARTY', 0, 66);
-    ctx.fillStyle = PALETTE.butter;
-    ctx.fillText('BIRTHDAY PARTY', 0, 66);
-    ctx.restore();
-    ctx.font = `700 23px ${FONT}`;
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = OUTLINE;
-    const lines = [
-      'Land on food, faces — anything. Somebody WILL swing.',
-      'Dodge at the last instant for PERFECT. Wreck the table. Chain the chaos.',
-      'At 0:10 the cake becomes the whole point.',
-    ];
-    lines.forEach((line, i) => {
-      ctx.strokeText(line, VIEW.width / 2, 356 + i * 32);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillText(line, VIEW.width / 2, 356 + i * 32);
-    });
-    const pulse = 0.75 + Math.sin(game.time * 4) * 0.25;
-    ctx.globalAlpha = pulse;
-    ctx.font = `800 30px ${FONT}`;
-    ctx.lineWidth = 6;
-    ctx.strokeText('CLICK OR PRESS SPACE', VIEW.width / 2, 520);
-    ctx.fillStyle = PALETTE.cyan;
-    ctx.fillText('CLICK OR PRESS SPACE', VIEW.width / 2, 520);
-    ctx.globalAlpha = 1;
-    ctx.font = `700 18px ${FONT}`;
-    ctx.lineWidth = 4;
-    ctx.strokeText('Mouse to fly · SPACE / right-click to dodge · P pauses', VIEW.width / 2, 566);
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fillText('Mouse to fly · SPACE / right-click to dodge · P pauses', VIEW.width / 2, 566);
-    if (game.bestScore > 0) {
-      ctx.font = `800 19px ${FONT}`;
-      ctx.strokeText(`BEST: ${game.bestScore}`, VIEW.width / 2, 606);
-      ctx.fillStyle = PALETTE.butter;
-      ctx.fillText(`BEST: ${game.bestScore}`, VIEW.width / 2, 606);
-    }
-  }
-
-  drawResults(game) {
-    const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(16,8,24,0.78)';
-    ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-    const rank = game.rank ?? GAME.ranks[GAME.ranks.length - 1];
-    this.drawPhoto(game);
-    // Rank stamp, top-right.
-    ctx.save();
-    ctx.translate(1184, 122);
-    ctx.rotate(0.16);
-    ctx.font = `800 74px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = PALETTE.magenta;
-    ctx.strokeText(rank.id, 0, 0);
-    ctx.font = `800 17px ${FONT}`;
-    ctx.fillStyle = PALETTE.magenta;
-    ctx.fillText(rank.stamp, 0, 30);
-    ctx.restore();
-    // Caption + stats down the right column.
-    const cxR = 872;
-    ctx.textAlign = 'center';
-    let capSize = 26;
-    ctx.font = `800 ${capSize}px ${FONT}`;
-    const cap = game.caption || '';
-    while (ctx.measureText(cap).width > 500 && capSize > 17) {
-      capSize -= 2;
-      ctx.font = `800 ${capSize}px ${FONT}`;
-    }
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = OUTLINE;
-    ctx.strokeText(cap, cxR, 108);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillText(cap, cxR, 108);
-    if (game.newBest) {
-      ctx.font = `800 20px ${FONT}`;
-      ctx.lineWidth = 5;
-      ctx.strokeText('NEW BEST!', cxR, 142);
-      ctx.fillStyle = PALETTE.magenta;
-      ctx.fillText('NEW BEST!', cxR, 142);
-    }
-    ctx.textAlign = 'left';
-    const rows = [
-      ['SCORE', `${game.score}`],
-      ['BEST COMBO', `x${game.maxCombo}`],
-      ['LONGEST CHAIN', `x${Math.max(1, game.longestChain)}`],
-      ['PARTY RUINED', `${Math.round(game.destruction01 * 100)}%`],
-    ];
-    rows.forEach(([k, v], i) => {
-      const y = 226 + i * 46;
-      ctx.font = `700 20px ${FONT}`;
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText(k, 566, y);
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.fillText(k, 566, y);
-      ctx.font = `800 27px ${FONT}`;
-      ctx.lineWidth = 5;
-      ctx.strokeText(v, 806, y);
-      ctx.fillStyle = PALETTE.butter;
-      ctx.fillText(v, 806, y);
-    });
-    if (game.lifeBonus > 0) {
-      ctx.font = `700 16px ${FONT}`;
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = OUTLINE;
-      const note = `(score includes +${game.lifeBonus} for the lives you kept)`;
-      ctx.strokeText(note, 566, 226 + 4 * 46);
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.fillText(note, 566, 226 + 4 * 46);
-    }
-    if (game.nearMissLine) {
-      ctx.textAlign = 'center';
-      ctx.font = `800 21px ${FONT}`;
-      ctx.lineWidth = 5;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText(game.nearMissLine, cxR, 478);
-      ctx.fillStyle = PALETTE.cyan;
-      ctx.fillText(game.nearMissLine, cxR, 478);
-    }
-    // The disaster log: 12 cells across the bottom.
-    ctx.textAlign = 'center';
-    ctx.font = `800 19px ${FONT}`;
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = OUTLINE;
-    ctx.strokeText('DISASTER LOG', VIEW.width / 2, 540);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillText('DISASTER LOG', VIEW.width / 2, 540);
-    const cols = 6;
-    const cw = 196;
-    const ch = 58;
-    const gx = VIEW.width / 2 - (cols * cw) / 2;
-    const gy = 552;
-    GALLERY.forEach((g, i) => {
-      const cx = gx + (i % cols) * cw;
-      const cy = gy + Math.floor(i / cols) * (ch + 8);
-      const unlocked = game.metaGallery.has(g.id);
-      ctx.fillStyle = unlocked ? 'rgba(255,201,74,0.16)' : 'rgba(255,255,255,0.05)';
-      roundRect(ctx, cx + 4, cy, cw - 8, ch, 9);
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = unlocked ? PALETTE.butter : 'rgba(255,255,255,0.25)';
-      ctx.stroke();
-      ctx.font = `800 14.5px ${FONT}`;
-      ctx.fillStyle = unlocked ? PALETTE.butter : 'rgba(255,255,255,0.55)';
-      ctx.fillText(unlocked ? g.name : '???', cx + cw / 2, cy + 21);
-      ctx.font = `600 11px ${FONT}`;
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
-      const sub = unlocked ? g.desc : g.hint;
-      ctx.fillText(sub.length > 32 ? sub.slice(0, 31) + '\u2026' : sub, cx + cw / 2, cy + 41);
-    });
-    const ready = game.time - game.finishTime > 0.8;
-    if (ready) {
-      const pulse = 0.7 + Math.sin(game.time * 4) * 0.3;
-      ctx.globalAlpha = pulse;
-      ctx.font = `800 24px ${FONT}`;
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = OUTLINE;
-      ctx.strokeText('BUZZ AGAIN \u2014 PRESS R', VIEW.width / 2, 716);
-      ctx.fillStyle = PALETTE.cyan;
-      ctx.fillText('BUZZ AGAIN \u2014 PRESS R', VIEW.width / 2, 716);
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  // The family photo: the clean print (F4) with this run's damage
-  // overlaid, or — once the party is more than half ruined — the
-  // fully ruined print (F3). Falls back to a hand-drawn strip while
-  // the images are still loading.
-  drawPhoto(game) {
-    const ctx = this.ctx;
-    const px = 36;
-    const py = 44;
-    const size = 452;
-    const ruined = game.destruction01 >= 0.55;
-    const img = ruined ? this.photoRuined : this.photoClean;
-    ctx.save();
-    ctx.translate(px + size / 2, py + size / 2);
-    ctx.rotate(-0.012);
-    ctx.translate(-size / 2, -size / 2);
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 18;
-    ctx.shadowOffsetY = 6;
-    if (img && img.complete && img.naturalWidth > 0) {
-      ctx.drawImage(img, 0, 0, size, size);
-      ctx.shadowColor = 'transparent';
-      if (!ruined) this.photoDamage(game, size);
-      else if (game.events.cakeBoom) this.creamSplat(size * 0.5, size * 0.74, 30);
-    } else {
-      ctx.shadowColor = 'transparent';
-      this.drawPhotoFallback(game, 0, 0, size);
-    }
-    ctx.restore();
-  }
-
-  creamSplat(x, y, r) {
-    const ctx = this.ctx;
-    // The painted cream decals (S5) first; code blobs as fallback.
-    if (spritesReady()) {
-      const name = r >= 28 ? 'cream-big' : r >= 16 ? 'cream-mid' : 'cream-small';
-      if (drawSprite(ctx, name, x, y, { w: r * 2.5 })) return;
-    }
-    ctx.fillStyle = 'rgba(255,240,244,0.92)';
-    for (let i = 0; i < 5; i++) {
-      const a = i * 1.7 + x;
-      ctx.beginPath();
-      ctx.ellipse(x + Math.cos(a) * r * 0.5, y + Math.sin(a) * r * 0.4, r * (0.35 + (i % 3) * 0.12), r * 0.26, a, 0, TAU);
-      ctx.fill();
-    }
-    ctx.beginPath();
-    ctx.arc(x, y, r * 0.42, 0, TAU);
-    ctx.fill();
-  }
-
-  photoDamage(game, size) {
-    const ctx = this.ctx;
-    // Face anchors inside the clean print (relative to its frame).
-    const anchors = {
-      Dad: [0.20, 0.30],
-      Timmy: [0.40, 0.47],
-      Mom: [0.63, 0.30],
-      Grandpa: [0.86, 0.38],
-    };
-    for (const h of game.table.humans) {
-      const a = anchors[h.name];
-      if (!a) continue;
-      const x = a[0] * size;
-      const y = a[1] * size;
-      if (h.soupFace) {
-        if (!(spritesReady() && drawSprite(ctx, 'soupface', x, y - size * 0.01, { w: size * 0.17 }))) {
-          ctx.fillStyle = 'rgba(232,116,59,0.92)';
-          ctx.beginPath();
-          ctx.arc(x, y - size * 0.045, size * 0.052, Math.PI, TAU);
-          ctx.fill();
-          for (let d = 0; d < 3; d++) {
-            ctx.beginPath();
-            ctx.ellipse(x - size * 0.03 + d * size * 0.03, y - size * 0.03, 3.4, 9 + d * 3, 0, 0, TAU);
-            ctx.fill();
-          }
-        }
-      }
-      if (h.palmPrint) {
-        if (!(spritesReady() && drawSprite(ctx, 'palmprint', x + size * 0.035, y + size * 0.02, { w: size * 0.085, rot: 0.5 }))) {
-          ctx.save();
-          ctx.translate(x + size * 0.035, y + size * 0.02);
-          ctx.rotate(0.5);
-          ctx.fillStyle = 'rgba(255,64,54,0.8)';
-          ctx.beginPath();
-          ctx.ellipse(0, 3, 8.5, 10, 0, 0, TAU);
-          ctx.fill();
-          for (let f = 0; f < 4; f++) {
-            ctx.beginPath();
-            ctx.ellipse(-6 + f * 4.2, -7, 2.2, 5, (f - 1.5) * 0.16, 0, TAU);
-            ctx.fill();
-          }
-          ctx.restore();
-        }
-      }
-      if (h.hatKind === 'greens' || h.hatKind === 'chicken') {
-        if (!(spritesReady() && drawSprite(ctx, h.hatKind, x, y - size * 0.075, { w: size * 0.11, rot: 0.3 }))) {
-          if (h.hatKind === 'greens') {
-            ctx.fillStyle = '#4CAF50';
-            for (let i = 0; i < 4; i++) {
-              ctx.beginPath();
-              ctx.ellipse(x + Math.cos(i * 1.9) * 8, y - size * 0.075 + Math.sin(i * 1.9) * 3, 9, 5.5, i, 0, TAU);
-              ctx.fill();
-            }
-          } else {
-            ctx.fillStyle = '#D98E32';
-            ctx.beginPath();
-            ctx.ellipse(x, y - size * 0.075, 13, 8, 0.3, 0, TAU);
-            ctx.fill();
-          }
-        }
-      }
-    }
-    if (game.events.dentures) {
-      // Grandpa's teeth, mid-flight, top-right — just like F3.
-      if (!(spritesReady() && drawSprite(ctx, 'dentures', size * 0.74, size * 0.15, { w: size * 0.1, rot: -0.25 }))) {
-        ctx.save();
-        ctx.translate(size * 0.74, size * 0.15);
-        ctx.rotate(-0.25);
-        ctx.fillStyle = '#FF9FB2';
-        ctx.beginPath();
-        ctx.arc(0, 0, 13, 0.1 * Math.PI, 0.9 * Math.PI);
-        ctx.fill();
-        ctx.fillStyle = '#FFFFFF';
-        for (let i = -2; i <= 2; i++) ctx.fillRect(i * 4.6 - 2, 4, 4, 7);
-        ctx.restore();
-      }
-    }
-    if (game.table.humans[3].glassesOff) {
-      ctx.save();
-      ctx.translate(size * 0.13, size * 0.85);
-      ctx.rotate(0.4);
-      ctx.strokeStyle = OUTLINE;
-      ctx.lineWidth = 2.4;
-      ctx.beginPath();
-      ctx.arc(-9, 0, 7.5, 0, TAU);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(9, 0, 7.5, 0, TAU);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(-2, -2);
-      ctx.lineTo(2, -2);
-      ctx.stroke();
-      ctx.restore();
-    }
-    if (game.events.cakeBoom) {
-      this.creamSplat(size * 0.5, size * 0.74, 34);
-      this.creamSplat(size * 0.38, size * 0.68, 18);
-      this.creamSplat(size * 0.62, size * 0.8, 20);
-      // The culprit, sitting in the wreckage.
-      ctx.fillStyle = PALETTE.ink;
-      ctx.beginPath();
-      ctx.ellipse(size * 0.5, size * 0.72, 7, 5.4, 0, 0, TAU);
-      ctx.fill();
-      ctx.fillStyle = '#E8332A';
-      ctx.beginPath();
-      ctx.arc(size * 0.5 + 5, size * 0.72 - 2.4, 2.6, 0, TAU);
-      ctx.arc(size * 0.5 + 5, size * 0.72 + 2.4, 2.6, 0, TAU);
-      ctx.fill();
-    }
-    if (game.destruction01 >= 0.25) {
-      // General splatter, seeded by the score so the print is
-      // stable across frames.
-      let seed = game.score * 7 + 13;
-      const rnd = () => {
-        seed = (seed * 16807) % 2147483647;
-        return seed / 2147483647;
-      };
-      for (let i = 0; i < 4; i++) {
-        this.creamSplat(size * (0.15 + rnd() * 0.7), size * (0.2 + rnd() * 0.6), 9 + rnd() * 9);
-      }
-    }
-  }
-
-  drawPhotoFallback(game, x, y, size) {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.fillStyle = '#FFF6E8';
-    roundRect(ctx, 0, 0, size, size * 0.42, 10);
-    ctx.fill();
-    ctx.fillStyle = '#3A2A4A';
-    roundRect(ctx, 8, 8, size - 16, size * 0.42 - 16, 6);
-    ctx.fill();
-    game.table.humans.forEach((h, i) => {
-      const hx = 62 + i * (size - 100) / 3;
-      const hy = size * 0.21;
-      ctx.fillStyle = h.look.clothes;
-      ctx.beginPath();
-      ctx.ellipse(hx, hy + 34, 40, 20, 0, 0, TAU);
-      ctx.fill();
-      ctx.fillStyle = h.look.skin ?? PALETTE.skin;
-      ctx.beginPath();
-      ctx.arc(hx, hy, 31, 0, TAU);
-      ctx.fill();
-      ctx.lineWidth = 2.6;
-      ctx.strokeStyle = OUTLINE;
-      ctx.stroke();
-      if (h.soupFace) {
-        ctx.fillStyle = 'rgba(232,116,59,0.9)';
-        ctx.beginPath();
-        ctx.arc(hx, hy - 10, 24, Math.PI, TAU);
-        ctx.fill();
-      }
-      if (h.palmPrint) {
-        ctx.fillStyle = 'rgba(255,64,54,0.8)';
-        ctx.beginPath();
-        ctx.ellipse(hx + 11, hy + 3, 8, 9.5, 0.4, 0, TAU);
-        ctx.fill();
-      }
-      ctx.fillStyle = '#FFF6E8';
-      ctx.font = `700 13px ${FONT}`;
-      ctx.textAlign = 'center';
-      ctx.fillText(h.name, hx, size * 0.42 - 14);
-    });
-    ctx.restore();
-  }
 }

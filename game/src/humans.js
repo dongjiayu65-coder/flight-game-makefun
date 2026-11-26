@@ -1,264 +1,313 @@
-// humans.js — the family as a director: four people, their personal
-// slap cooldowns, and the attacks they launch — palms (Dad's comes
-// twice after 55s), Mom's bug-spray fan, Timmy's party-hat charge,
-// Grandpa's faster, smaller swatter. From 55s the family can keep
-// two attacks in the air at once. The palm is the player's weapon:
-// it lands where the taunt locked it, and whatever is underneath
-// pays for the fly's timing.
+// humans.js — the family as data, plus the Director: the part
+// that turns "someone is annoyed" into a warning ring on the
+// table. People here are plain state (main.js runs the expression
+// machine over them); the Director owns attack timing, tracking,
+// locking, weapon shapes and the leftover spray mist.
 
-import { TAUNT, V3 } from './config.js';
+import { TAUNT } from './config.js';
 
-// Interpolate the spec's timing table (2.2): taunt delay, warning
-// length and personal cooldown all glide, never step.
-export function timingAt(elapsed) {
-  const tl = TAUNT.timeline;
-  if (elapsed <= tl[0].at) return tl[0];
-  for (let i = 1; i < tl.length; i++) {
-    if (elapsed <= tl[i].at) {
-      const a = tl[i - 1];
-      const b = tl[i];
-      const k = (elapsed - a.at) / (b.at - a.at);
-      return {
-        tauntDelay: a.tauntDelay + (b.tauntDelay - a.tauntDelay) * k,
-        warn: a.warn + (b.warn - a.warn) * k,
-        ownerCooldown: a.ownerCooldown + (b.ownerCooldown - a.ownerCooldown) * k,
-      };
+// One family member's worth of state. Timers count down in
+// seconds; expression is whichever face the machine last chose.
+export function makeHuman(seat) {
+  return {
+    id: seat.id,
+    name: seat.name,
+    x: seat.x,
+    y: seat.y,
+    headR: seat.headR,
+    look: seat.look, // { clothes, skin, hairColor }
+    expression: 'happy',
+    shownExpr: 'happy',
+    shockExpr: null,
+    exprT: 0,
+    angryT: 0,
+    annoyCount: 0,
+    annoyDecayT: 0,
+    shockT: 0,
+    gloatT: 0,
+    popT: 0,
+    slapT: 0,
+    blockedT: 0,   // cannot slap (standing in soup, posing, ...)
+    cooldownT: 0,  // personal time-out between slaps
+    aiming: false,
+    soupFace: false,
+    palmPrint: false,
+    hatKind: null, // food stuck on the head: 'greens' | 'chicken'
+    glassesOff: false,
+    denturesOut: false,
+    steam: false,
+    stateT: 0,
+  };
+}
+
+// Attack pacing over the round: [fromSecond, tauntDelay, warn,
+// cooldown], blended linearly between rows so nothing jumps.
+const PACE_ROWS = [
+  [0, 0.4, 1.4, 2.5],
+  [10, 0.4, 1.4, 2.5],
+  [30, 0.35, 1.2, 2.2],
+  [55, 0.3, 1.05, 1.9],
+  [80, 0.2, 0.9, 1.5],
+];
+
+export function timingAt(t) {
+  let a = PACE_ROWS[0];
+  let b = PACE_ROWS[PACE_ROWS.length - 1];
+  for (let i = 0; i < PACE_ROWS.length - 1; i++) {
+    if (t >= PACE_ROWS[i][0] && t <= PACE_ROWS[i + 1][0]) {
+      a = PACE_ROWS[i];
+      b = PACE_ROWS[i + 1];
+      break;
     }
   }
-  return tl[tl.length - 1];
+  if (t >= b[0]) a = b;
+  const span = Math.max(0.0001, b[0] - a[0]);
+  const f = Math.min(1, Math.max(0, (t - a[0]) / span));
+  return {
+    tauntDelay: a[1] + (b[1] - a[1]) * f,
+    warn: a[2] + (b[2] - a[2]) * f,
+    cooldown: a[3] + (b[3] - a[3]) * f,
+  };
 }
 
-// How far the warning ring has visually shrunk, per the owner's
-// rhythm personality (v3 P1-3). The impact still lands at t = dur —
-// personalities bend the *reading* of the ring, never the clock, so
-// the rating windows stay honest. Dad is the metronome everyone
-// learns on; Grandpa stalls at 60% with shaking hands; Mom dawdles
-// then rushes the last 300ms.
+// How far a warning ring has closed, 0 -> 1. Grandpa's stall is
+// baked into atk.t itself (his clock genuinely runs slow for a
+// stretch), so this stays a plain ratio.
 export function warnProgress(atk) {
-  const u = Math.min(1, atk.t / atk.dur);
-  if (atk.kind !== 'palm') return u;
-  if (atk.personality === 'grandpa') {
-    const h = Math.min(0.2, V3.grandpaPause / atk.dur);
-    if (u <= V3.grandpaPauseAt) return u;
-    if (u <= V3.grandpaPauseAt + h) return V3.grandpaPauseAt;
-    const rest = 1 - V3.grandpaPauseAt - h;
-    return V3.grandpaPauseAt + ((u - V3.grandpaPauseAt - h) / rest) * (1 - V3.grandpaPauseAt);
-  }
-  if (atk.personality === 'mom') {
-    const u0 = Math.max(0.3, 1 - 0.3 / atk.dur);
-    if (u < u0) return 0.75 * u;
-    return 0.75 * u0 + ((u - u0) / (1 - u0)) * (1 - 0.75 * u0);
-  }
-  return u;
+  if (!atk || !(atk.dur > 0)) return 1;
+  return Math.min(1, Math.max(0, atk.t / atk.dur));
 }
 
-// Is Grandpa's ring currently in its shaking stall? (render hook)
 export function grandpaStalled(atk) {
-  if (atk.personality !== 'grandpa' || atk.kind !== 'palm') return false;
-  const u = atk.t / atk.dur;
-  const h = Math.min(0.2, V3.grandpaPause / atk.dur);
-  return u > V3.grandpaPauseAt && u <= V3.grandpaPauseAt + h;
+  return atk.personality === 'grandpa' && atk.state === 'warning' && atk.stalled === true;
 }
-
-let ATTACK_ID = 1;
 
 export class Director {
-  constructor(table, rng = Math.random) {
+  constructor(table, rng) {
     this.table = table;
     this.rng = rng;
-    this.time = 0;
-    this.attacks = []; // palm | spray | poke slots
-    this.mist = null; // Mom's lingering spray cloud {x, y, dir, t}
-    this.nearMisses = 0; // Close/PERFECT dodges, for the results card
+    this.attacks = [];
+    this.mist = null; // { x, y, dir, t } leftover bug spray
+    this.nearMisses = 0;
+    this.nextId = 1;
   }
 
-  maxConcurrent(elapsed) {
-    return elapsed >= TAUNT.concurrentFrom ? TAUNT.maxConcurrent : 1;
-  }
-
+  // Is there room for another live warning right now? One at a
+  // time early, two once everyone is on their feet.
   freeSlot(elapsed) {
-    return this.attacks.filter((a) => a.state === 'warning' || a.state === 'slam').length < this.maxConcurrent(elapsed);
+    const cap = elapsed >= TAUNT.doubleAt ? 2 : 1;
+    const live = this.attacks.filter((a) => a.state === 'warning' && !a.decor).length;
+    return live < cap;
   }
 
-  nearestHuman(x, y, freeOnly = false, elapsed = 0) {
+  nearestHuman(x, y, free = false) {
     let best = null;
-    let bd = Infinity;
+    let bestD = Infinity;
     for (const h of this.table.humans) {
-      if (freeOnly && (h.cooldownT > 0 || h.blockedT > 0)) continue;
-      const d = Math.hypot(x - h.x, y - h.y);
-      if (d < bd) {
-        bd = d;
+      if (free && (h.cooldownT > 0 || h.blockedT > 0)) continue;
+      const d = Math.hypot(h.x - x, h.y - y);
+      if (d < bestD) {
+        bestD = d;
         best = h;
       }
     }
     return best;
   }
 
-  // Launch an attack for a locked taunt. kind: 'palm' | 'spray' |
-  // 'poke'. Weapon rules (spec 2.7) shape the slot here.
+  // Start a warning. opts: { target, finale, idle, warnScale,
+  // noWeapon }. The caller has already waited out the taunt delay.
   startAttack(owner, x, y, elapsed, opts = {}) {
+    if (!owner) return null;
     const timing = timingAt(elapsed);
+    let warn = timing.warn;
     let kind = 'palm';
-    // P0-3: the finale is always a palm, whoever's hand it is — Timmy's
-    // hat charge (0.55s) and Mom's spray (never explodes the cake)
-    // used to hijack the climax.
-    if (opts.finale) kind = 'palm';
-    else if (opts.kind) kind = opts.kind;
-    else if (elapsed >= TAUNT.sprayAt && owner.name === 'Mom' && !opts.noWeapon) kind = 'spray';
-    else if (elapsed >= TAUNT.pokeAt && owner.name === 'Timmy' && !opts.noWeapon) kind = 'poke';
+    let swatter = false;
+    let secondPending = false;
+    let radius = 46;
+    let warnFrom = 110;
+    if (!opts.noWeapon && !opts.finale) {
+      if (owner.id === 'mom' && elapsed >= TAUNT.sprayAt) {
+        kind = 'spray';
+        warn *= 0.9;
+        radius = 230; // the fan's reach
+        warnFrom = 170;
+      } else if (owner.id === 'grandpa' && elapsed >= TAUNT.swatterAt) {
+        swatter = true;
+        warn *= 0.75;
+        radius = 38;
+      } else if (owner.id === 'dad' && elapsed >= TAUNT.doubleAt) {
+        secondPending = true;
+      } else if (owner.id === 'timmy' && elapsed >= TAUNT.doubleAt) {
+        kind = 'poke';
+      }
+    }
+    if (opts.finale) {
+      warn = 1.5;
+      radius = 56;
+      warnFrom = 130;
+    }
+    if (opts.idle) warn *= opts.warnScale ?? 1;
+    owner.cooldownT = Math.max(0, timing.cooldown - (swatter ? 0.4 : 0));
     const atk = {
-      id: ATTACK_ID++,
-      kind,
-      state: 'warning',
-      t: 0,
-      x, y,
+      id: this.nextId++,
       owner,
       target: opts.target ?? null,
-      finale: !!opts.finale,
-      idle: !!opts.idle, // an idle-punishment air slap (no chain)
-      radius: TAUNT.impactRadius,
-      dur: timing.warn,
-      secondPending: false,
-      // v3: rhythm personality (P1-3) and the tracking palm (P0-1).
-      personality: owner.name === 'Grandpa' ? 'grandpa'
-        : owner.name === 'Mom' ? 'mom'
-        : owner.name === 'Timmy' ? 'timmy' : 'dad',
-      trackSpeed: elapsed >= V3.trackFrom ? V3.trackSpeedLate : V3.trackSpeed,
+      x,
+      y,
+      fromX: owner.x,
+      fromY: owner.y,
+      dir: Math.atan2(y - owner.y, x - owner.x),
+      kind,
+      swatter,
+      personality: owner.id,
+      state: 'warning',
+      t: 0,
+      dur: warn,
+      remainMs: warn * 1000,
       locked: false,
       justLocked: false,
+      stalled: false,
+      finale: !!opts.finale,
+      idle: !!opts.idle,
+      decor: false,
+      tutorial: null,
+      secondPending,
+      pairId: null,
+      radius,
+      warnFrom,
+      // Fields the game annotates while grading a dodge.
+      exitByFlash: false,
+      exited: false,
+      graced: false,
+      wasInside: false,
+      skidded: false,
+      flashRemainMs: null,
+      finaleCombo: null,
+      finaleRatingId: null,
+      finaleRatingMult: null,
+      slamT: 0,
     };
-    if (kind === 'palm') {
-      if (owner.name === 'Grandpa' && elapsed >= TAUNT.swatterAt && !opts.finale) {
-        atk.radius = TAUNT.swatterRadius;
-        atk.dur *= TAUNT.swatterWarnScale;
-        atk.swatter = true;
-      }
-      if (owner.name === 'Dad' && elapsed >= TAUNT.doubleAt && !opts.noWeapon && !opts.finale) {
-        atk.secondPending = true; // the newspaper comes down twice
-      }
-      if (opts.warnScale) atk.dur *= opts.warnScale;
-      if (opts.finale) atk.dur = 1.5;
-    } else if (kind === 'spray') {
-      atk.dur = timing.warn * 0.9;
-      atk.dir = Math.atan2(y - owner.y, x - owner.x);
-    } else if (kind === 'poke') {
-      // Timmy charges the line from his seat to the locked spot; the
-      // warning lasts as long as his little legs need.
-      const dist = Math.hypot(x - owner.x, y - owner.y);
-      atk.dur = Math.max(0.55, dist / 620);
-      atk.fromX = owner.x;
-      atk.fromY = owner.y;
-    }
-    owner.cooldownT = timing.ownerCooldown + (atk.swatter ? -0.4 : 0);
     this.attacks.push(atk);
     return atk;
   }
 
-  // Mom's leftover cloud: is the fly breathing it?
-  mistHolds(fx, fy) {
-    if (!this.mist) return false;
-    const dx = fx - this.mist.x;
-    const dy = fy - this.mist.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > TAUNT.sprayRange || dist < 16) return false;
-    let diff = Math.atan2(dy, dx) - this.mist.dir;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    return Math.abs(diff) < TAUNT.sprayHalfAngle;
+  // Dad's newspaper comes down twice: the follow-up is a fresh,
+  // already-locked warning on the same spot, half a beat later.
+  spawnSecondSlap(first) {
+    const atk = {
+      ...first,
+      id: this.nextId++,
+      state: 'warning',
+      t: 0,
+      dur: TAUNT.doubleGap,
+      remainMs: TAUNT.doubleGap * 1000,
+      locked: true,
+      justLocked: false,
+      secondPending: false,
+      pairId: first.pairId ?? first.id,
+      radius: 52,
+      exitByFlash: false,
+      exited: false,
+      graced: false,
+      wasInside: false,
+      skidded: false,
+      flashRemainMs: null,
+      finaleCombo: null,
+      finaleRatingId: null,
+      finaleRatingMult: null,
+      slamT: 0,
+    };
+    if (first.pairId == null) first.pairId = first.id;
+    this.attacks.push(atk);
+    return atk;
   }
 
-  fanHolds(atk, fx, fy) {
-    const dx = fx - atk.owner.x;
-    const dy = fy - atk.owner.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > TAUNT.sprayRange || dist < 16) return false;
-    let diff = Math.atan2(dy, dx) - atk.dir;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    return Math.abs(diff) < TAUNT.sprayHalfAngle;
-  }
+  // Advance every attack. Returns the attacks whose slap landed
+  // during this step (each exactly once, on the transition).
+  update(dt, fly) {
+    // State clocks for everything on the table live here, since
+    // this update runs every frame of the round.
+    for (const it of [...this.table.foods, ...this.table.dressing]) it.stateT += dt;
+    for (const h of this.table.humans) h.stateT += dt;
 
-  // The tracking palm (v3 P0-1): until the lock moment, a warning's
-  // impact point chases the fly at a capped speed — palms and hat
-  // charges drag their centre, Mom's spray rotates its fan. The
-  // finale is scripted onto the cake and never tracks. At 350ms out
-  // the point locks; Timmy's locked point jumps (he's fast, not
-  // accurate), which is his whole personality.
-  track(atk, dt, fly) {
-    // P0-2: scripted tutorial slaps never chase the fly — the opening
-    // must land on Dad's own face, the soup beat on the soup.
-    if (!fly || atk.finale || atk.tutorial) return;
-    const remain = atk.dur - atk.t;
-    if (atk.locked) return;
-    if (remain <= V3.lockMs / 1000) {
-      atk.locked = true;
-      atk.justLocked = true;
-      if (atk.personality === 'timmy') {
-        atk.x += (this.rng() * 2 - 1) * V3.timmyOffset;
-        atk.y += (this.rng() * 2 - 1) * V3.timmyOffset;
-      }
-      return;
-    }
-    if (atk.kind === 'spray') {
-      const want = Math.atan2(fly.y - atk.owner.y, fly.x - atk.owner.x);
-      let diff = want - atk.dir;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      const turn = 1.6 * dt;
-      atk.dir += Math.max(-turn, Math.min(turn, diff));
-      return;
-    }
-    const dx = fly.x - atk.x;
-    const dy = fly.y - atk.y;
-    const d = Math.hypot(dx, dy);
-    if (d < 0.01) return;
-    const step = Math.min(d, atk.trackSpeed * dt);
-    atk.x += (dx / d) * step;
-    atk.y += (dy / d) * step;
-  }
-
-  // Advance everything. Returns the list of attacks that reached
-  // their impact frame this step (the game resolves them).
-  update(dt, fly = null) {
-    this.time += dt;
-    const impacts = [];
-    for (const h of this.table.humans) {
-      h.gaze = h.home + Math.sin(this.time * 0.45 * h.speedScale + h.phase) * 0.55;
-      h.cooldownT = Math.max(0, h.cooldownT - dt);
-      h.blockedT = Math.max(0, h.blockedT - dt);
-      h.angryT = Math.max(0, h.angryT - dt);
-      h.exprT = Math.max(0, h.exprT - dt);
-      h.shockT = Math.max(0, (h.shockT ?? 0) - dt);
-      h.gloatT = Math.max(0, (h.gloatT ?? 0) - dt);
-      h.slapT = Math.max(0, (h.slapT ?? 0) - dt);
-      h.popT = Math.max(0, (h.popT ?? 0) - dt);
-      h.stateT += dt;
-    }
-    for (const f of this.table.foods) f.stateT += dt;
-    for (const d of this.table.dressing) d.stateT += dt;
-    this.table.lampSwingT = Math.max(0, this.table.lampSwingT - dt);
     if (this.mist) {
       this.mist.t -= dt;
       if (this.mist.t <= 0) this.mist = null;
     }
-    for (const atk of this.attacks) {
-      atk.t += dt;
-      if (atk.state === 'warning') this.track(atk, dt, fly);
-      if (atk.state === 'warning' && atk.t >= atk.dur) {
-        atk.state = 'slam';
-        atk.t = 0;
-        impacts.push(atk);
-      } else if (atk.state === 'slam' && atk.t > (atk.kind === 'poke' ? 0.3 : 0.16)) {
-        atk.state = 'recover';
-        atk.t = 0;
-        if (atk.kind === 'spray') {
-          this.mist = { x: atk.owner.x, y: atk.owner.y, dir: atk.dir, t: TAUNT.sprayMistTime };
+
+    const impacts = [];
+    for (const atk of this.attacks) atk.justLocked = false;
+    for (const atk of [...this.attacks]) {
+      if (atk.state === 'warning') {
+        if (!atk.locked && fly) {
+          // Still hunting: the slap point trails the fly.
+          const k = Math.min(1, dt * 14);
+          atk.x += (fly.x - atk.x) * k;
+          atk.y += (fly.y - atk.y) * k;
+          atk.dir = Math.atan2(atk.y - atk.fromY, atk.x - atk.fromX);
         }
-      } else if (atk.state === 'recover' && atk.t >= TAUNT.palmRecover) {
-        atk.state = 'done';
+        // Grandpa's arm gives out mid-swing: his clock crawls for
+        // the middle stretch of the warning, then recovers.
+        let rate = 1;
+        atk.stalled = false;
+        if (atk.personality === 'grandpa' && !atk.finale) {
+          const f = atk.t / atk.dur;
+          if (f > 0.3 && f < 0.55) {
+            rate = 0.3;
+            atk.stalled = true;
+          }
+        }
+        atk.t += dt * rate;
+        atk.remainMs = Math.max(0, (atk.dur - atk.t) * 1000);
+        const lockFrac = atk.kind === 'poke' ? 0.72 : 0.5;
+        if (!atk.locked && atk.t >= atk.dur * lockFrac) {
+          atk.locked = true;
+          atk.justLocked = true;
+        }
+        if (atk.t >= atk.dur) {
+          atk.state = 'slam';
+          atk.slamT = 0.12;
+          atk.remainMs = 0;
+          impacts.push(atk);
+          if (atk.kind === 'spray') {
+            this.mist = { x: atk.x, y: atk.y, dir: atk.dir, t: 1.5 };
+          }
+          if (atk.secondPending) this.spawnSecondSlap(atk);
+        }
+      } else if (atk.state === 'slam') {
+        atk.slamT -= dt;
+        if (atk.slamT <= 0) atk.state = 'done';
       }
     }
-    this.attacks = this.attacks.filter((a) => a.state !== 'done');
+    if (this.attacks.some((a) => a.state === 'done')) {
+      this.attacks = this.attacks.filter((a) => a.state !== 'done');
+    }
     return impacts;
+  }
+
+  // Is a point inside this spray attack's fan right now?
+  fanHolds(atk, fx, fy) {
+    const dx = fx - atk.fromX;
+    const dy = fy - atk.fromY;
+    const dist = Math.hypot(dx, dy);
+    if (dist > atk.radius) return false;
+    if (dist < 30) return true;
+    let diff = Math.atan2(dy, dx) - atk.dir;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    return Math.abs(diff) <= 0.52; // a 60-degree cone
+  }
+
+  // Is a point standing in leftover spray mist?
+  mistHolds(x, y) {
+    const m = this.mist;
+    if (!m) return false;
+    if (Math.hypot(x - m.x, y - m.y) < 34) return true;
+    for (let i = 1; i <= 3; i++) {
+      const cx = m.x + Math.cos(m.dir) * i * 55;
+      const cy = m.y + Math.sin(m.dir) * i * 55;
+      if (Math.hypot(x - cx, y - cy) < 16 + i * 9 + 14) return true;
+    }
+    return false;
   }
 }

@@ -1,194 +1,97 @@
-// table.js — the dinner scene laid out once per run: the four
-// dishes, the dressing (all of it tauntable, smashable scenery), and
-// the four family members seated at the edges — Mom north, Grandpa
-// west, Timmy the birthday boy east, Dad south. Positions come from
-// the run's seed, so a screenshot pose and a played run agree.
+// table.js — the room's contents: four dishes, the dressing
+// props, the family in their seats, and the landing zones the fly
+// settles on. Zones are built once and handed out by identity, so
+// "am I still on the same target?" is a === question.
 
-import { ROOM, FOODS, HUMANS } from './config.js';
+import { ROOM } from './config.js';
+import { makeHuman } from './humans.js';
 import { makeRng } from './random.js';
+
+const HEAD_R = 63; // drawn head radius (already the x1.15 size)
+
+// Seats, in the order the rest of the game expects:
+// Mom, Grandpa, Timmy, Dad.
+const SEATS = [
+  { id: 'mom', name: 'Mom', x: 620, y: 103, look: { clothes: '#B565D8', skin: '#FFCFA8', hairColor: '#4A2C1A' } },
+  { id: 'grandpa', name: 'Grandpa', x: 152, y: 388, look: { clothes: '#8A9A5B', skin: '#F2C9A0', hairColor: '#E8E4DA' } },
+  { id: 'timmy', name: 'Timmy', x: 1128, y: 388, look: { clothes: '#FFC94A', skin: '#FFD9B0', hairColor: '#6B4226' } },
+  { id: 'dad', name: 'Dad', x: 634, y: 716, look: { clothes: '#4C7BD9', skin: '#FFCFA8', hairColor: '#2B2B30' } },
+];
+
+// Dishes in their fixed order: greens, soup, cake, chicken.
+const FOOD_DEFS = [
+  { id: 'greens', name: 'Garlic Greens', x: 430, y: 330, r: 36 },
+  { id: 'soup', name: 'Tomato Egg Soup', x: 600, y: 215, r: 30 },
+  { id: 'cake', name: 'Birthday Cake', x: 760, y: 430, r: 52 },
+  { id: 'chicken', name: 'Roast Chicken', x: 830, y: 300, r: 40 },
+];
+
+const DRESSING_DEFS = [
+  { id: 'cup', name: 'Drink Cup', x: 520, y: 480, r: 24 },
+  { id: 'fork', name: 'Fork', x: 680, y: 520, r: 26 },
+  { id: 'knife', name: 'Knife', x: 350, y: 470, r: 26 },
+  { id: 'plate', name: 'Plate', x: 600, y: 560, r: 30 },
+];
+
+function makeItem(def, kind) {
+  const item = {
+    id: def.id,
+    name: def.name,
+    kind,
+    x: def.x,
+    y: def.y,
+    r: def.r,
+    state: 'fresh',
+    stateT: 0,
+    creamSplats: 0,
+  };
+  if (def.id === 'cake') {
+    // Eight candles on a ring; the renderer scales the offsets
+    // onto the painting, so these are in cake-local units.
+    item.candlesLit = 8;
+    item.candles = [];
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      item.candles.push({ dx: Math.cos(a) * 20, dy: Math.sin(a) * 14 });
+    }
+  }
+  return item;
+}
 
 export class Table {
   constructor(seed) {
-    const rng = makeRng(seed);
-    const t = ROOM.table;
-    this.rect = t;
-
-    // The four dishes: greens west, soup centre-north, cake east,
-    // the roast chicken south-centre (the dog has plans for it).
-    const spots = [
-      { x: t.x + t.w * 0.26, y: t.y + t.h * 0.54 },
-      { x: t.x + t.w * 0.52, y: t.y + t.h * 0.32 },
-      { x: t.x + t.w * 0.76, y: t.y + t.h * 0.56 },
-      { x: t.x + t.w * 0.5, y: t.y + t.h * 0.8 },
-    ];
-    const radii = [46, 42, 54, 52];
-    this.foods = FOODS.map((f, i) => ({
-      ...f,
-      x: spots[i].x + (rng() - 0.5) * 30,
-      y: spots[i].y + (rng() - 0.5) * 24,
-      r: radii[i],
-      state: 'fresh', // cake: 'smashed' only in the finale
-      stateT: 0,
-      candlesLit: i === 2 ? 8 : 0, // the cake's eight candles
-      creamSplats: 0, // pre-finale cake damage, purely cosmetic
-    }));
-    // Per-dish garnish, rolled once from the same seeded stream so
-    // the renderer draws every leaf and strawberry in the same
-    // place on every frame.
-    for (const f of this.foods) {
-      const inDish = (rad) => {
-        const a = rng() * Math.PI * 2;
-        const d = Math.sqrt(rng()) * rad;
-        return { dx: Math.cos(a) * d, dy: Math.sin(a) * d * 0.92 };
-      };
-      if (f.id === 'greens') {
-        f.leaves = Array.from({ length: 26 }, () => ({ ...inDish(f.r * 0.78), rot: rng() * Math.PI, s: 0.75 + rng() * 0.6, tone: rng() }));
-        f.garlic = Array.from({ length: 7 }, () => ({ ...inDish(f.r * 0.7), rot: rng() * Math.PI }));
-        f.chili = Array.from({ length: 5 }, () => inDish(f.r * 0.72));
-      } else if (f.id === 'soup') {
-        f.tomatoes = Array.from({ length: 7 }, () => ({ ...inDish(f.r * 0.68), r: 5 + rng() * 3.6 }));
-        f.eggRibbons = Array.from({ length: 5 }, () => ({ ...inDish(f.r * 0.66), rot: rng() * Math.PI, s: 0.8 + rng() * 0.7 }));
-        f.scallions = Array.from({ length: 11 }, () => inDish(f.r * 0.8));
-      } else if (f.id === 'cake') {
-        f.strawberries = Array.from({ length: 5 }, (_, i) => {
-          const a = (i / 5) * Math.PI * 2 + rng() * 0.5;
-          return { dx: Math.cos(a) * f.r * 0.52, dy: Math.sin(a) * f.r * 0.48, rot: rng() * Math.PI };
-        });
-        f.blueberries = Array.from({ length: 6 }, () => inDish(f.r * 0.62));
-        f.sprinkles = Array.from({ length: 16 }, () => ({ ...inDish(f.r * 0.8), rot: rng() * Math.PI, tone: rng() }));
-        // Eight candles in a ring (spec 1.3).
-        f.candles = Array.from({ length: 8 }, (_, i) => {
-          const a = (i / 8) * Math.PI * 2;
-          return { dx: Math.cos(a) * f.r * 0.62, dy: Math.sin(a) * f.r * 0.56, hue: i % 3 };
-        });
-      }
-    }
-
-    // Dressing (design list #3): only what the S2 atlas can paint —
-    // cups, forks, knives, side plates. The rice bowls, teacups,
-    // chopsticks, sauce dishes, napkins and teapot were code-drawn
-    // placeholders and are gone. (Fewer rng draws: seeded layouts
-    // shift once relative to v5.)
-    this.dressing = [];
-    // v6.1: no 'plate' — the atlas has no intact side-plate frame
-    // (only plate-cracked), so plates still drew as blank code
-    // circles. Cups, forks and knives are all painted.
-    const kinds = ['cup', 'fork', 'knife', 'cup', 'fork', 'knife', 'cup', 'fork'];
-    for (let i = 0; i < kinds.length; i++) {
-      this.dressing.push({
-        kind: kinds[i],
-        x: t.x + 60 + rng() * (t.w - 120),
-        y: t.y + 50 + rng() * (t.h - 100),
-        r: 13 + rng() * 12,
-        rot: rng() * Math.PI,
-        state: 'fresh',
-        stateT: 0,
-      });
-    }
-    // Keep dressing out of the dishes' plates.
-    this.dressing = this.dressing.filter(
-      (d) => !this.foods.some((f) => Math.hypot(d.x - f.x, d.y - f.y) < f.r + d.r + 10),
-    );
-
-    // The family (spec 1.4). Big sticker heads at the table edges,
-    // seated on the painted chairs (ROOM.seats, measured off the
-    // layers19 background plate).
-    const cx = t.x + t.w / 2;
-    const cy = t.y + t.h / 2;
-    const seats = [
-      { ...ROOM.seats[0], name: 'Mom', look: { hair: 'bun', hairColor: '#4a2c1a', skin: '#FFCFA8', clothes: '#B565D8', earrings: true, blush: true, glasses: false, moustache: false, hat: false, dentures: false } },
-      { ...ROOM.seats[1], name: 'Grandpa', look: { hair: 'bald', hairColor: '#e8e4da', skin: '#FFCFA8', clothes: '#8A9A5B', earrings: false, blush: false, glasses: false, moustache: false, hat: false, dentures: true } },
-      { ...ROOM.seats[2], name: 'Timmy', look: { hair: 'kid', hairColor: '#3a2a1c', skin: '#FFD9B0', clothes: '#FFC94A', earrings: false, blush: true, glasses: false, moustache: false, hat: true, dentures: false, gapTooth: true } },
-      { ...ROOM.seats[3], name: 'Dad', look: { hair: 'short', hairColor: '#26221f', skin: '#FFCFA8', clothes: '#4C7BD9', earrings: false, blush: false, glasses: true, moustache: true, hat: false, dentures: false } },
-    ];
-    this.humans = seats.slice(0, HUMANS.count).map((s, i) => ({
-      ...s,
-      home: Math.atan2(cy - s.y, cx - s.x),
-      phase: rng() * Math.PI * 2,
-      speedScale: 0.85 + rng() * 0.4,
-      blinkOffset: rng() * 4,
-      gaze: 0,
-      headR: 48, // the taunt zone (spec 3.3)
-      // Living state.
-      expression: 'happy', // happy|suspicious|angry|scared|slapped
-      exprT: 0,
-      cooldownT: 0, // personal slap cooldown (spec 2.2)
-      blockedT: 0, // cannot slap at all (standing in soup, posing…)
-      angryT: 0,
-      annoyCount: 0, // times wronged recently (v5: repeats fester longer)
-      annoyDecayT: 0, // P1-4: seconds since the last offence, for decay
-      // Expression system (design list P1).
-      shockT: 0, // splashed / dish smashed in front: short reaction
-      shockExpr: 'angry',
-      gloatT: 0, // laughing at somebody else's misfortune
-      slapT: 0, // slapped stretch spring-back
-      popT: 0, // frame-change squash-bounce
-      shownExpr: 'happy', // last frame actually decided (change detector)
-      aiming: false, // currently owns a live warning
-      steam: false, // 55s+: default angry, steaming
-      stateT: 0,
-      // Accumulated ruin (the results photo reads these).
-      soupFace: false,
-      palmPrint: false,
-      glassesOff: false,
-      denturesOut: false,
-      hatKind: null, // 'greens' | 'chicken' — food worn as a hat
-    }));
-    this.lamp = ROOM.lamp;
-    this.lampSwingT = 0; // the chandelier, once knocked (E4)
+    this.rng = makeRng(seed * 13 + 5);
+    this.rect = { ...ROOM.table };
+    this.lamp = { ...ROOM.lamp };
     this.lampDropped = false;
+    this.lampSwingT = 0;
+    this.foods = FOOD_DEFS.map((d) => makeItem(d, 'food'));
+    this.dressing = DRESSING_DEFS.map((d) => makeItem(d, 'dressing'));
+    this.humans = SEATS.map((s) => makeHuman({ ...s, headR: HEAD_R }));
+
+    // Landing zones in priority order: the cake, the faces, the
+    // soup, the other dishes, then the small props.
+    const zoneOf = (ref, kind, r) => ({ kind, ref, x: ref.x, y: ref.y, r });
+    const byId = (arr, id) => arr.find((it) => it.id === id);
+    this.zones = [
+      zoneOf(byId(this.foods, 'cake'), 'cake', byId(this.foods, 'cake').r),
+      ...this.humans.map((h) => zoneOf(h, 'head', h.headR)),
+      zoneOf(byId(this.foods, 'soup'), 'soup', byId(this.foods, 'soup').r),
+      zoneOf(byId(this.foods, 'greens'), 'greens', byId(this.foods, 'greens').r),
+      zoneOf(byId(this.foods, 'chicken'), 'chicken', byId(this.foods, 'chicken').r),
+      zoneOf(byId(this.dressing, 'plate'), 'plate', byId(this.dressing, 'plate').r),
+      zoneOf(byId(this.dressing, 'cup'), 'cup', byId(this.dressing, 'cup').r),
+      zoneOf(byId(this.dressing, 'fork'), 'fork', byId(this.dressing, 'fork').r),
+      zoneOf(byId(this.dressing, 'knife'), 'knife', byId(this.dressing, 'knife').r),
+    ];
   }
 
-  // What tauntable thing is under a point, by the spec's priority
-  // order (3.3): cake, heads, (dog — the game checks it first),
-  // soup, the other dishes, cups, cutlery. Smashed things stop
-  // answering; the cake always answers (candles, then the finale).
+  // The zone under a point, or null. Smashed items stop offering
+  // themselves; faces always do.
   propAt(x, y) {
-    const cake = this.foods[2];
-    if (cake.state !== 'smashed' && Math.hypot(x - cake.x, y - cake.y) < 58) {
-      return { kind: 'cake', ref: cake, x: cake.x, y: cake.y, r: cake.r };
-    }
-    for (const h of this.humans) {
-      if (Math.hypot(x - h.x, y - h.y) < h.headR) return { kind: 'head', ref: h, x: h.x, y: h.y, r: h.headR };
-    }
-    const soup = this.foods[1];
-    if (soup.state === 'fresh' && Math.hypot(x - soup.x, y - soup.y) < 42) {
-      return { kind: 'soup', ref: soup, x: soup.x, y: soup.y, r: soup.r };
-    }
-    for (const f of [this.foods[0], this.foods[3]]) {
-      if (f.state !== 'fresh') continue;
-      const dx = (x - f.x) / (f.r + 6);
-      const dy = (y - f.y) / (f.r * 0.82 + 6);
-      if (dx * dx + dy * dy < 1) return { kind: f.id, ref: f, x: f.x, y: f.y, r: f.r };
-    }
-    for (const d of this.dressing) {
-      if (d.state !== 'fresh') continue;
-      if ((d.kind === 'cup' || d.kind === 'teacup') && Math.hypot(x - d.x, y - d.y) < 26) {
-        return { kind: d.kind, ref: d, x: d.x, y: d.y, r: d.r };
-      }
-    }
-    for (const d of this.dressing) {
-      if (d.state !== 'fresh') continue;
-      if (d.kind === 'fork' || d.kind === 'knife') {
-        // A capsule: distance to the cutlery's spine segment.
-        const ex = d.x + Math.cos(d.rot) * 30;
-        const ey = d.y + Math.sin(d.rot) * 30;
-        const bx = d.x - Math.cos(d.rot) * 30;
-        const by = d.y - Math.sin(d.rot) * 30;
-        const abx = ex - bx;
-        const aby = ey - by;
-        const tt = Math.max(0, Math.min(1, ((x - bx) * abx + (y - by) * aby) / (abx * abx + aby * aby)));
-        if (Math.hypot(x - (bx + abx * tt), y - (by + aby * tt)) < 18) {
-          return { kind: d.kind, ref: d, x: d.x, y: d.y, r: d.r };
-        }
-      }
-    }
-    for (const d of this.dressing) {
-      if (d.state !== 'fresh') continue;
-      if (d.kind !== 'cup' && d.kind !== 'teacup' && d.kind !== 'fork' && d.kind !== 'knife' &&
-          Math.hypot(x - d.x, y - d.y) < d.r + 8) {
-        return { kind: d.kind, ref: d, x: d.x, y: d.y, r: d.r };
-      }
+    for (const z of this.zones) {
+      if (z.kind !== 'head' && z.ref.state !== 'fresh') continue;
+      if (Math.hypot(x - z.x, y - z.y) <= z.r) return z;
     }
     return null;
   }

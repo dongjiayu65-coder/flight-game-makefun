@@ -1,119 +1,122 @@
-// input.js — the whole control scheme, deliberately tiny: the mouse
-// leads (the fly turns toward it), the space bar is the "嗡" (buzz)
-// key, R restarts, and P pauses. Touch works too: drag to lead, hold
-// to buzz. Everything is exposed as plain state the main loop reads.
+// input.js — devices in, game vocabulary out. The game polls two
+// things: where the pointer is (mouse / steer) and a small queue
+// of named actions ('Space', 'Dodge', 'Tap', ...) that take()
+// hands out exactly once each. A dodge press also raises
+// flashPressed for a few frames, which is how the game grades
+// its timing.
+
+const ACTION_TTL_MS = 200; // an unconsumed action goes stale
+const FLASH_WINDOW_MS = 90;
 
 export class Input {
   constructor(canvas) {
-    this.mouse = { x: 0, y: 0, inside: false };
-    this.buzz = false;
-    this.pressed = new Set(); // keys that went down since last read
     this.canvas = canvas;
+    this.mouse = { x: 640, y: 400, inside: false };
+    this.queues = new Map(); // name -> [timestamps]
+    this.clicks = [];        // timestamps of click/tap presses
+    this.lastFlashAt = -Infinity;
 
     const toGame = (clientX, clientY) => {
-      const rect = canvas.getBoundingClientRect();
+      const r = canvas.getBoundingClientRect();
       return {
-        x: ((clientX - rect.left) / rect.width) * canvas.width,
-        y: ((clientY - rect.top) / rect.height) * canvas.height,
+        x: ((clientX - r.left) / r.width) * canvas.width,
+        y: ((clientY - r.top) / r.height) * canvas.height,
       };
     };
-    canvas.addEventListener('mousemove', (e) => {
-      const p = toGame(e.clientX, e.clientY);
+    const pointMouse = (clientX, clientY, lift = 0) => {
+      const p = toGame(clientX, clientY);
       this.mouse.x = p.x;
-      this.mouse.y = p.y;
+      this.mouse.y = p.y - lift;
       this.mouse.inside = true;
+    };
+
+    canvas.addEventListener('mousemove', (e) => pointMouse(e.clientX, e.clientY));
+    canvas.addEventListener('mouseleave', () => {
+      this.mouse.inside = false;
     });
-    canvas.addEventListener('mouseleave', () => (this.mouse.inside = false));
-    // P1-5: right-click is a dodge (spec 3.2), never the browser menu.
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('mousedown', (e) => {
-      this.buzz = true;
-      if (e.button === 2) {
-        this.pressed.add('Dodge');
-        e.preventDefault();
+      pointMouse(e.clientX, e.clientY);
+      if (e.button === 2) this.pressFlash();
+      else if (e.button === 0) this.clicks.push(performance.now());
+    });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Touch: the first finger steers (its point rides above the
+    // fingertip so the fly is never hidden); a second finger is
+    // a dodge, and any touch landing counts as a tap.
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (e.touches.length >= 2) {
+        this.pressFlash();
         return;
       }
-      if (e.button === 0) this.clicked = true;
-    });
-    window.addEventListener('mouseup', () => {
-      if (!this.keyBuzz) this.buzz = false;
-    });
-    // P1-5 touch: the FIRST finger steers (the fly aims 60px above
-    // it so the finger never hides it, spec 3.5); any ADDITIONAL
-    // finger that lands is a dodge. A first touch on the title /
-    // results / pause veil still counts as a click.
-    this.steerTouchId = null;
-    const steerTo = (t) => {
-      const p = toGame(t.clientX, t.clientY);
-      this.mouse.x = p.x;
-      this.mouse.y = p.y - 60;
-      this.mouse.inside = true;
-    };
-    canvas.addEventListener('touchstart', (e) => {
-      for (const t of e.changedTouches) {
-        if (this.steerTouchId === null) {
-          this.steerTouchId = t.identifier;
-          steerTo(t);
-          // Not a click: in play the first finger only steers. Menus
-          // (results, focus veil) read this as their tap.
-          this.pressed.add('Tap');
-        } else {
-          this.pressed.add('Dodge');
-        }
-      }
-      this.buzz = true;
-      e.preventDefault();
+      const t = e.touches[0];
+      pointMouse(t.clientX, t.clientY, 60);
+      this.push('Tap');
+      this.clicks.push(performance.now());
     }, { passive: false });
     canvas.addEventListener('touchmove', (e) => {
-      for (const t of e.changedTouches) {
-        if (t.identifier === this.steerTouchId) steerTo(t);
-      }
       e.preventDefault();
+      const t = e.touches[0];
+      if (t) pointMouse(t.clientX, t.clientY, 60);
     }, { passive: false });
-    const endTouch = (e) => {
-      for (const t of e.changedTouches) {
-        if (t.identifier === this.steerTouchId) this.steerTouchId = null;
-      }
-      if (e.touches.length === 0) this.buzz = false;
-    };
-    canvas.addEventListener('touchend', endTouch);
-    canvas.addEventListener('touchcancel', endTouch);
+    canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length === 0) this.mouse.inside = false;
+    });
 
-    this.keyBuzz = false;
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') {
-        this.keyBuzz = true;
-        this.buzz = true;
-        this.pressed.add('Space');
         e.preventDefault();
-      }
-      if (e.code === 'KeyR') this.pressed.add('KeyR');
-      if (e.code === 'KeyP') this.pressed.add('KeyP');
-      if (e.code === 'Enter') this.pressed.add('Enter');
-    });
-    window.addEventListener('keyup', (e) => {
-      if (e.code === 'Space') {
-        this.keyBuzz = false;
-        this.buzz = false;
+        if (!e.repeat) {
+          this.pressFlash();
+          this.push('Space');
+        }
+      } else if (!e.repeat) {
+        if (e.code === 'Enter') this.push('Enter');
+        else if (e.code === 'KeyR') this.push('KeyR');
+        else if (e.code === 'KeyP') this.push('KeyP');
       }
     });
   }
 
-  // One-shot mouse click, consumed by the caller.
+  // The steering point for this frame, or null when the pointer
+  // is not over the stage.
+  get steer() {
+    return this.mouse.inside ? { x: this.mouse.x, y: this.mouse.y } : null;
+  }
+
+  // True for a short window after any dodge press (space bar,
+  // right click, second finger).
+  get flashPressed() {
+    return performance.now() - this.lastFlashAt < FLASH_WINDOW_MS;
+  }
+
+  pressFlash() {
+    this.lastFlashAt = performance.now();
+    this.push('Dodge');
+  }
+
+  push(name) {
+    if (!this.queues.has(name)) this.queues.set(name, []);
+    this.queues.get(name).push(performance.now());
+  }
+
+  // Consume one queued action by name; stale ones never fire.
+  take(name) {
+    const q = this.queues.get(name);
+    if (!q) return false;
+    const now = performance.now();
+    while (q.length && now - q[0] > ACTION_TTL_MS) q.shift();
+    if (!q.length) return false;
+    q.shift();
+    return true;
+  }
+
   takeClick() {
-    if (this.clicked) {
-      this.clicked = false;
-      return true;
-    }
-    return false;
-  }
-
-  // One-shot key presses, consumed by the caller.
-  take(code) {
-    if (this.pressed.has(code)) {
-      this.pressed.delete(code);
-      return true;
-    }
-    return false;
+    const now = performance.now();
+    while (this.clicks.length && now - this.clicks[0] > ACTION_TTL_MS) this.clicks.shift();
+    if (!this.clicks.length) return false;
+    this.clicks.shift();
+    return true;
   }
 }

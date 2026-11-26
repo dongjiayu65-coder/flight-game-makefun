@@ -17,7 +17,6 @@ import { Input } from './input.js';
 import { Sound } from './audio.js';
 import { onSpritesReady } from './sprites.js';
 import { Copy, GALLERY } from './copy.js';
-import { applyPose } from './shots.js';
 
 const STEP = 1 / 60;
 
@@ -1795,7 +1794,6 @@ let runSeed = (Date.now() % 90000) + 1;
 if (!shotName) game.newRun(runSeed);
 
 if (shotName) {
-  applyPose(game, shotName);
   game.draw(0);
   // The results photos load async; repaint once they arrive so a
   // posed results shot shows the real print, not the fallback.
