@@ -200,12 +200,15 @@ export const GAME = {
   finaleComboCap: 2.0, // v7 #2: the finale's combo multiplier tops out at x2
   finaleSplatScore: 500, // if the fly is caught in the finale
   ranks: [
-    // v7 #3: re-estimated for the v7 score model (bets, crumbs,
-    // ruin milestones, 3000/heart, capped finale). First-pass
-    // estimate — recalibrate from the bot score distribution.
-    { id: 'S', min: 50000, stamp: 'TOTAL DISASTER' },
-    { id: 'A', min: 32000, stamp: 'CERTIFIED CHAOS' },
-    { id: 'B', min: 18000, stamp: 'MILDLY RUINED' },
+    // v7 #3: calibrated on the 6-run bot sample (median ~8.4k, all
+    // C; the bot skips crumbs, bets and aiming). The bot is the floor:
+    // its best runs sit within 20% of B, so the results card says
+    // "Only N pts from B". A human who survives and lands a Close
+    // finale (~12k) reaches B/A; S needs a PERFECT finale (20k) plus
+    // a strong run. Re-check against real human runs if any exist.
+    { id: 'S', min: 35000, stamp: 'TOTAL DISASTER' },
+    { id: 'A', min: 22000, stamp: 'CERTIFIED CHAOS' },
+    { id: 'B', min: 12000, stamp: 'MILDLY RUINED' },
     { id: 'C', min: 0, stamp: 'JUST A FLY' },
   ],
 };
