@@ -24,7 +24,10 @@ export class Input {
       this.mouse.inside = true;
     });
     canvas.addEventListener('mouseleave', () => (this.mouse.inside = false));
-    canvas.addEventListener('mousedown', () => (this.buzz = true));
+    canvas.addEventListener('mousedown', () => {
+      this.buzz = true;
+      this.clicked = true;
+    });
     window.addEventListener('mouseup', () => {
       if (!this.keyBuzz) this.buzz = false;
     });
@@ -64,6 +67,15 @@ export class Input {
         this.buzz = false;
       }
     });
+  }
+
+  // One-shot mouse click, consumed by the caller.
+  takeClick() {
+    if (this.clicked) {
+      this.clicked = false;
+      return true;
+    }
+    return false;
   }
 
   // One-shot key presses, consumed by the caller.

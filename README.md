@@ -4,19 +4,27 @@
 [![rank](https://make.fun/badge/best-flight-game-20261126-0057/dongjiayu65-coder/flight-game-makefun/rank.svg)](https://make.fun/bounty/best-flight-game-20261126-0057/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
 [![reward](https://make.fun/badge/best-flight-game-20261126-0057/dongjiayu65-coder/flight-game-makefun/reward.svg)](https://make.fun/bounty/best-flight-game-20261126-0057?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
 
-**《我是那只苍蝇》 — First-Person Fly at Dinner.** You are a fly over a
-family dinner table. You cannot steer like a plane: you glide, and the
-buzz key (space) dashes you forward — but every dash deflects by a
-random angle, because you are a fly. Steal the three dishes in order
-(greens, tomato-egg soup, birthday cake), landing on each to feed;
-every course makes you one weight fatter and your dashes wilder.
-Four humans sweep the table with their gaze cones — get watched too
-long and a giant palm comes down, shadow first. Eat everything, then
-escape through the open window.
+**One Fly Ruins a Birthday Party.** You are a fly at Timmy's 8th
+birthday dinner, and the family is your weapon. Land on anything —
+soup, faces, the roast chicken — and somebody's hand comes down on
+it. Dodge at the very last instant: the later you bail, the higher
+the rating (Early / Good / Close! / PERFECT!!) and the bigger the
+combo. Whatever the hand lands on breaks, splashes, flies across
+the table and sets off something else — soup in Mom's hair, Grandpa's
+dentures on a tour of the table, the dog making off with the chicken.
+Chain the chaos, evolve (golden fly, fire fly, rainbow fly), and at
+0:10 the cake starts glowing: land on it and all four hands come
+down at once. Survive the Final Slap for the CAKE-POCALYPSE — then
+see yourself in the ruined family photo and the 12-cell Disaster Log.
+
+Ninety seconds, three lives, one fly. The first ten seconds teach
+you everything, starting with Dad slapping his own face.
 
 A complete game from static files — no build step, no network
 requests. Open `game/index.html` through any static file server and
-play with mouse + keyboard (mouse leads, space buzzes, R restarts).
+play with mouse + keyboard (mouse steers, SPACE / right-click
+dodges, R restarts, P pauses). Progress and the Disaster Log are
+kept in `localStorage`.
 
 ## Run it
 

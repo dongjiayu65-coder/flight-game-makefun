@@ -1,10 +1,11 @@
-// fly.js — the fly itself: a body with a heading and a velocity, and
-// the one rule that makes it a fly — it cannot simply fly where it is
-// told. It glides and slows; the buzz key dashes it forward, but every
-// dash is deflected by a random angle, and the fatter it gets the
-// wilder the deflection and the weaker the dash.
+// fly.js — the fly itself, per spec 3.1/3.2: an underdamped spring
+// chases the mouse (K=42, DAMP=9.5 — critical damping would be ~13,
+// so it overshoots a little and feels alive), and the flash is a
+// 0.12s ease-out burst to a target point the game picks by the
+// spec's direction rules. The "fly-ness" (wobble, tilt) lives in the
+// renderer; nothing here is random, so the judging is always fair.
 
-import { FLY } from './config.js';
+import { FLY, ROOM } from './config.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -15,71 +16,157 @@ export class Fly {
     this.y = y;
     this.vx = 0;
     this.vy = 0;
-    this.heading = -Math.PI / 2; // facing north, toward the window
-    this.weight = 0; // foods eaten so far
-    this.cooldown = 0;
-    this.buzzing = false; // true on frames a dash fired (for sound/anim)
+    this.heading = -Math.PI / 2; // sprite angle; chases velocity
     this.wingPhase = 0;
     this.alive = true;
-    this.escaped = false;
+    this.target = { x, y }; // last mouse point (hover when it leaves)
+    // Flash state.
+    this.flashing = false;
+    this.flashT = 0;
+    this.flashFrom = { x, y };
+    this.flashTo = { x, y };
+    this.cooldownT = 0;
+    this.iframesT = 0;
+    this.bufferedT = -1; // >= 0: a press waiting out the cooldown
+    this.justFlashed = false;
+    // Squash and post-hit invulnerability.
+    this.squashT = 0;
+    this.invulnT = 0;
+    // Landing (spec 3.3): the prop currently landed on, if any.
+    this.landedOn = null;
+    this.trail = [];
   }
 
   get radius() {
-    // Visibly fatter with every course: +3 px of body per weight.
-    return FLY.radius + this.weight * 3;
-  }
-
-  get deflectRad() {
-    return ((FLY.dashDeflectDeg + FLY.deflectPerWeight * this.weight) * Math.PI) / 180;
-  }
-
-  // steer: {tx, ty} a point the fly turns toward (the mouse), or null.
-  // buzz: whether the buzz key is held this step.
-  update(dt, steer, buzz) {
-    this.buzzing = false;
-    if (!this.alive || this.escaped) return;
-
-    // The heading turns toward the mouse at a limited rate — the fly
-    // is willing, just not precise.
-    if (steer) {
-      const want = Math.atan2(steer.ty - this.y, steer.tx - this.x);
-      let diff = want - this.heading;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      const turn = clamp(diff, -FLY.steerRate * dt, FLY.steerRate * dt);
-      this.heading += turn;
-    }
-
-    // Glide: drag bleeds speed; a fat fly glides like a dumpling.
-    const drag = Math.exp(-FLY.glideDrag * dt * (1 - this.weight * 0.08));
-    this.vx *= drag;
-    this.vy *= drag;
-
-    // Buzz: each dash is an impulse along the heading, deflected by a
-    // random angle inside ±deflect — the heart of the game.
-    this.cooldown -= dt;
-    if (buzz && this.cooldown <= 0) {
-      const deflect = (this.rng() * 2 - 1) * this.deflectRad;
-      const dir = this.heading + deflect;
-      const power = FLY.dashImpulse * (1 - FLY.dashWeakPerWeight * this.weight);
-      this.vx += Math.cos(dir) * power;
-      this.vy += Math.sin(dir) * power;
-      this.cooldown = FLY.dashCooldown;
-      this.buzzing = true;
-    }
-
-    // Clamp to a top speed and move.
-    const sp = Math.hypot(this.vx, this.vy);
-    if (sp > FLY.maxSpeed) {
-      this.vx = (this.vx / sp) * FLY.maxSpeed;
-      this.vy = (this.vy / sp) * FLY.maxSpeed;
-    }
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    this.wingPhase += dt * (30 + sp * 0.06);
+    return FLY.radius;
   }
 
   get speed() {
     return Math.hypot(this.vx, this.vy);
+  }
+
+  get flashReady() {
+    return this.cooldownT <= 0 && !this.flashing && this.squashT <= 0;
+  }
+
+  get flashCooldown01() {
+    // 1 = ready. Drives the white ring's sector sweep.
+    const full = FLY.flashCooldown;
+    return this.flashing ? 0 : clamp(1 - this.cooldownT / full, 0, 1);
+  }
+
+  // Start a flash toward a target point (already rule-picked and
+  // clamped by the caller). Returns true when it fired.
+  startFlash(tx, ty, cooldown) {
+    if (!this.flashReady || !this.alive) return false;
+    this.flashFrom = { x: this.x, y: this.y };
+    this.flashTo = { x: tx, y: ty };
+    this.flashing = true;
+    this.flashT = 0;
+    this.iframesT = FLY.flashIframes;
+    this.cooldownT = cooldown;
+    this.justFlashed = true;
+    this.landedOn = null;
+    return true;
+  }
+
+  // A press that arrived early: remember it briefly (spec: 100ms
+  // input buffer); update() fires it the moment the cooldown ends.
+  bufferFlash() {
+    this.bufferedT = 0;
+  }
+
+  squash() {
+    this.squashT = 0.4;
+    this.invulnT = 1.2;
+    this.vx = 0;
+    this.vy = 0;
+    this.flashing = false;
+    this.landedOn = null;
+  }
+
+  // mouse: {x, y} the current cursor point in game space, or null
+  // when the cursor is off-canvas (the fly then hovers at its last
+  // target). wantsFlash: a direction-picked target from the game, or
+  // null. inMist: inside Mom's spray residue (spring goes soft).
+  update(dt, mouse, wantsFlash, inMist) {
+    this.justFlashed = false;
+    if (!this.alive) return;
+    this.cooldownT -= dt;
+    this.iframesT -= dt;
+    this.invulnT -= dt;
+    if (this.bufferedT >= 0) {
+      this.bufferedT += dt;
+      if (this.bufferedT > FLY.flashBuffer) this.bufferedT = -1;
+    }
+    if (this.squashT > 0) {
+      this.squashT -= dt;
+      this.wingPhase += dt * 4;
+      return;
+    }
+    if (mouse) this.target = { x: mouse.x, y: mouse.y };
+
+    // A buffered press fires the instant the cooldown clears.
+    if (wantsFlash && this.flashReady) {
+      this.startFlash(wantsFlash.x, wantsFlash.y, wantsFlash.cooldown);
+      this.bufferedT = -1;
+    }
+
+    if (this.flashing) {
+      this.flashT += dt;
+      const k = Math.min(1, this.flashT / FLY.flashDuration);
+      const ease = 1 - Math.pow(1 - k, 3);
+      this.x = this.flashFrom.x + (this.flashTo.x - this.flashFrom.x) * ease;
+      this.y = this.flashFrom.y + (this.flashTo.y - this.flashFrom.y) * ease;
+      if (k >= 1) {
+        // Keep 40% of the burst's speed, then the spring takes over.
+        const dx = this.flashTo.x - this.flashFrom.x;
+        const dy = this.flashTo.y - this.flashFrom.y;
+        const burstSpeed = Math.hypot(dx, dy) / FLY.flashDuration;
+        const len = Math.hypot(dx, dy) || 1;
+        this.vx = (dx / len) * burstSpeed * 0.4;
+        this.vy = (dy / len) * burstSpeed * 0.4;
+        this.flashing = false;
+      }
+    } else {
+      // The spring (spec 3.1, verbatim but for the mist modifier).
+      const K = FLY.springK * (inMist ? 0.6 : 1);
+      const maxSpeed = FLY.maxSpeed * (inMist ? 0.6 : 1);
+      let ax = (this.target.x - this.x) * K - this.vx * FLY.springDamp;
+      let ay = (this.target.y - this.y) * K - this.vy * FLY.springDamp;
+      this.vx += ax * dt;
+      this.vy += ay * dt;
+      const dist = Math.hypot(this.target.x - this.x, this.target.y - this.y);
+      if (dist < 5 && this.speed < 30) {
+        const keep = Math.pow(0.85, dt * 60);
+        this.vx *= keep;
+        this.vy *= keep;
+      }
+      const s = this.speed;
+      if (s > maxSpeed) {
+        this.vx *= maxSpeed / s;
+        this.vy *= maxSpeed / s;
+      }
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+    }
+
+    // The stage: the table, plus a 30px apron around it.
+    const t = ROOM.table;
+    this.x = clamp(this.x, t.x - 30, t.x + t.w + 30);
+    this.y = clamp(this.y, t.y - 30, t.y + t.h + 30);
+
+    // The sprite turns toward its velocity at 14 rad/s (spec 3.1).
+    if (this.speed > 40) {
+      const want = Math.atan2(this.vy, this.vx);
+      let diff = want - this.heading;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      this.heading += clamp(diff, -14 * dt, 14 * dt);
+    }
+    this.wingPhase += dt * (26 + this.speed * 0.09);
+
+    this.trail.unshift({ x: this.x, y: this.y });
+    if (this.trail.length > 12) this.trail.pop();
   }
 }

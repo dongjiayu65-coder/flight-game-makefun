@@ -1,24 +1,46 @@
-// main.js — the game itself: the state machine (title → playing →
-// won/caught), the fixed-step loop, and the rules that connect the
-// modules — eating off the current dish builds weight, a full table
-// of empty plates opens the window, and the palm ends what it catches.
-//
-// The fly starts each run on the south edge of the table. Eat the
-// three dishes in order (the pulsing one is next), then escape
-// through the window on the north wall.
+// main.js — the game itself: "One Fly Ruins a Birthday Party",
+// built to the final spec (Quick Claude v1.0 + copy bank v1.0).
+// Land on anything to taunt it; the family's attack locks onto the
+// spot; leave the impact radius at the last instant — PERFECT is a
+// 70ms window — and the attack smashes whatever was underneath
+// instead, in chains (E1-E10). Combo feeds chaos, chaos feeds
+// combo. Three hits or ninety seconds end the party.
 
-import { VIEW, ROOM } from './config.js';
+import { VIEW, ROOM, FLY, TAUNT, RATINGS, PERFECT_GRACE_MS, FINALE_PERFECT_MS, COMBO, EVENTS, RANDOM_EVENTS, PHASES, GAME } from './config.js';
 import { makeRng } from './random.js';
 import { Table } from './table.js';
 import { Fly } from './fly.js';
-import { Humans } from './humans.js';
+import { Director, timingAt } from './humans.js';
 import { Renderer } from './render.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { Sound } from './audio.js';
+import { Copy, GALLERY } from './copy.js';
 import { applyPose } from './shots.js';
 
 const STEP = 1 / 60;
+
+// Page-session persistence (localStorage where the sandbox allows
+// it, in-memory otherwise): best score, the disaster log, run count.
+const META = (window.__flyMeta ??= (() => {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem('oneFlyMeta') || '{}');
+  } catch { saved = {}; }
+  return { best: saved.best || 0, gallery: new Set(saved.gallery || []), runs: saved.runs || 0 };
+})());
+function persistMeta() {
+  try {
+    localStorage.setItem('oneFlyMeta', JSON.stringify({ best: META.best, gallery: [...META.gallery], runs: META.runs }));
+  } catch { /* the sandbox said no; the in-memory copy still works */ }
+}
+
+const comboMult = (combo) => Math.min(COMBO.multCap, 1 + COMBO.multPer * combo);
+const tierFor = (combo) => {
+  let tier = COMBO.tiers[0];
+  for (const t of COMBO.tiers) if (combo >= t.at) tier = t;
+  return tier;
+};
 
 class Game {
   constructor(canvas, seed) {
@@ -29,97 +51,1183 @@ class Game {
     this.state = 'title';
     this.time = 0;
     this.paused = false;
+    this.freezeT = 0;
+    this.slowmoT = 0;
+    this.slowmoVal = 0.35;
+    this.whiteFlashT = 0;
+    this.redFlashT = 0;
+    this.shakeAmp = 0;
+    this.zoomT = 0;
+    this.zoomAmp = 0;
   }
 
   newRun(seed) {
+    this.rng = makeRng(seed * 13 + 5);
+    this.copy = new Copy(seed);
+    this.metaGallery = META.gallery;
+    this.bestScore = META.best;
     this.table = new Table(seed);
-    const t = ROOM.table;
-    this.fly = new Fly(makeRng(seed * 7 + 1), t.x + t.w / 2, t.y + t.h - 40);
-    this.humans = new Humans(this.table);
-    this.elapsed = 0;
-    this.grams = 0;
-    this.escapeOpen = false;
+    this.director = new Director(this.table);
+    const dad = this.table.humans[3];
+    this.fly = new Fly(makeRng(seed * 7 + 1), dad.x, dad.y - 6);
+    this.clock = 0; // real run clock (tutorial included)
+    this.elapsed = 0; // the 90s party clock (starts after the tutorial)
+    this.tutorial = META.runs === 0 ? 'script' : 'quick';
+    this.tutPhase = 'nose'; // nose -> soup -> done (script) | quick
+    this.tutAttack = null;
+    this.score = 0;
+    this.chaosTotal = 0;
+    this.combo = 0;
+    this.maxCombo = 0;
+    this.hp = GAME.hp;
+    this.lastGoodClock = -99;
+    this.decayAcc = 0;
+    this.lastTier = 'plain';
+    this.tierPopT = 0;
+    this.landClock = 0;
+    this.hoverZone = null;
+    this.tauntClock = 0;
+    this.idleClock = 0;
+    this.pendingFlash = false;
+    this.prevFlashReady = true;
+    this.eventQueue = []; // {at, fn} derivations, 0.3s per chain layer
+    this.eventCd = new Map(); // object ref -> clock when its event re-arms
+    this.longestChain = 0;
+    this.brawlCount = 0;
+    this.finaleTriggered = false;
+    this.finaleDone = false;
+    this.finaleAnnounced = false;
+    this.resultsAt = -1;
+    this.finishTime = -1;
     this.endReason = '';
-    this.chompT = 0;
-    this.warned = false;
+    this.lifeBonus = 0;
+    this.caption = '';
+    this.nearMissLine = '';
+    this.rank = null;
+    this.particles = [];
+    this.texts = [];
+    this.projectiles = [];
+    this.landedProps = [];
+    this.chainPop = null; // {n, t} the fixed CHAIN banner
+    this.dog = null;
+    this.puddle = null; // {x, y, t} spilled drink (E7)
+    this.blackoutT = 0;
+    this.doorbellT = 0;
+    this.photoT = 0;
+    this.randomIdx = 0;
+    this.randomUsed = new Map();
+    this.lastRandom = null;
+    this.weaponFlags = { spray: false, swatter: false, late: false };
+    this.soupRefillAt = -1;
+    this.showKeycap = false;
+    this.ghostTarget = null;
+    this.hudSlideT = META.runs === 0 ? 0 : 1;
+    this.events = { soupFace: false, cakeBoom: false, glasses: false, dentures: false, palmPrint: false, forkChain: false };
   }
 
   start() {
     this.state = 'playing';
-    this.hud.announce('偷吃开始！先吃发亮的那道菜', 2.4);
   }
+
+  get tier() {
+    return tierFor(this.combo);
+  }
+
+  get destruction01() {
+    return Math.min(1, this.chaosTotal / GAME.destructionFull);
+  }
+
+  get finaleArmed() {
+    return this.elapsed >= PHASES.finaleAt && !this.finaleDone;
+  }
+
+  // --- fx helpers --------------------------------------------------------
+
+  spawnParticles(list) {
+    for (const p of list) {
+      p.max = p.life;
+      this.particles.push(p);
+    }
+    if (this.particles.length > 400) this.particles.splice(0, this.particles.length - 400);
+  }
+
+  burst(x, y, n, color, speed = 120, size = 3, life = 0.55, grav = 600) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = Math.sin(i * 12.9898 + x) * 3.1 + i * 0.7;
+      const sp = speed * (0.35 + ((i * 37) % 10) / 14);
+      out.push({
+        x, y,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 46,
+        life: life * (0.6 + ((i * 53) % 10) / 16), size: size * (0.6 + ((i * 29) % 10) / 12),
+        color, grav,
+      });
+    }
+    this.spawnParticles(out);
+  }
+
+  floatText(x, y, text, color = '#ffe9a3', size = 26, opts = {}) {
+    this.texts.push({ x, y, text, color, size, t: 0, life: opts.life ?? 1.05, flyTo: !!opts.flyTo, bubble: !!opts.bubble });
+    if (this.texts.length > 16) this.texts.shift();
+  }
+
+  flyProjectile(kind, fromX, fromY, toX, toY, onArrive) {
+    this.projectiles.push({
+      kind, x: fromX, y: fromY, fromX, fromY, toX, toY,
+      t: 0, dur: 0.62, peak: 90 + Math.abs(toX - fromX) * 0.12, rot: 0, onArrive,
+    });
+  }
+
+  unlock(id) {
+    if (META.gallery.has(id)) return;
+    META.gallery.add(id);
+    persistMeta();
+    this.floatText(VIEW.width / 2, 150, 'NEW DISASTER!', '#ffd94d', 30);
+    this.sound.comboUp();
+  }
+
+  queueEvent(delay, fn) {
+    this.eventQueue.push({ at: this.clock + delay, fn });
+  }
+
+  eventReady(ref, seconds) {
+    const readyAt = this.eventCd.get(ref) ?? -1;
+    if (this.clock < readyAt) return false;
+    this.eventCd.set(ref, this.clock + seconds);
+    return true;
+  }
+
+  // --- the run -----------------------------------------------------------
 
   step(dt, input) {
     this.time += dt;
+    this.stepFx(dt);
     if (this.state !== 'playing') return;
-    this.elapsed += dt;
-
-    const steer = input.steer;
-    this.fly.update(dt, steer, input.buzz);
-    this.sound.buzz(this.fly.speed, this.fly.buzzing);
-
-    const wasPalm = this.humans.palm.state;
-    const outcome = this.humans.update(dt, this.fly, this.elapsed);
-    if (this.humans.palm.state === 'warning' && wasPalm === 'idle') {
-      this.hud.announce('巨掌来了！快跑！！', 0.9);
-      this.sound.warn();
+    this.clock += dt;
+    if (this.tutorial === 'done') this.elapsed += dt;
+    this.tierPopT = Math.max(0, this.tierPopT - dt);
+    if (this.chainPop) {
+      this.chainPop.t += dt;
+      if (this.chainPop.t > 0.9) this.chainPop = null;
     }
-    if (outcome === 'caught') {
-      this.state = 'caught';
-      this.fly.alive = false;
-      this.endReason = '巨掌落了下来——晚餐之旅到此为止。';
-      this.sound.splat();
-      this.sound.buzz(0, false);
+    this.blackoutT = Math.max(0, this.blackoutT - dt);
+    this.doorbellT = Math.max(0, this.doorbellT - dt);
+    this.photoT = Math.max(0, this.photoT - dt);
+    if (this.hudSlideT < 1 && this.tutorial === 'done') this.hudSlideT = Math.min(1, this.hudSlideT + dt / 0.9);
+    if (this.puddle) {
+      this.puddle.t -= dt;
+      if (this.puddle.t <= 0) this.puddle = null;
+    }
+    if (this.table.foods[1].state === 'empty' && this.clock >= this.soupRefillAt) {
+      this.table.foods[1].state = 'fresh'; // seconds, anyone?
+    }
+    // Queued chain derivations fire on their own clock.
+    for (let i = this.eventQueue.length - 1; i >= 0; i--) {
+      if (this.clock >= this.eventQueue[i].at) {
+        const ev = this.eventQueue.splice(i, 1)[0];
+        ev.fn();
+      }
+    }
+
+    this.handleFlash(input);
+    const inMist = this.director.mistHolds(this.fly.x, this.fly.y);
+    this.fly.update(dt, input.steer, null, inMist);
+    this.sound.buzz(true);
+
+    const impacts = this.director.update(dt);
+    for (const atk of impacts) this.resolveImpact(atk);
+    this.trackEscapes();
+
+    this.tutorialLogic(dt);
+    this.landingLogic(dt);
+    this.comboLogic(dt);
+    this.dogLogic(dt);
+    this.phaseLogic();
+    this.expressionLogic();
+    this.sound.update(dt, { playing: true, flySpeed: this.fly.speed, landed: !!this.fly.landedOn, warnMs: this.warnRemainMs() });
+
+    if (this.resultsAt > 0 && this.clock >= this.resultsAt) return this.finish(this.endReason);
+    if (this.hp <= 0) return this.finish('GAME OVER');
+    if (this.tutorial === 'done' && this.elapsed >= GAME.duration) return this.finish("TIME'S UP!");
+  }
+
+  // The tightest warning clock, for the accelerating tick track.
+  warnRemainMs() {
+    let best = null;
+    for (const atk of this.director.attacks) {
+      if (atk.state !== 'warning') continue;
+      const remain = (atk.dur - atk.t) * 1000;
+      if (best === null || remain < best) best = remain;
+    }
+    return best;
+  }
+
+  // Flash direction rules (spec 3.2): if a warning has the fly
+  // locked and the player isn't steering anywhere, flash directly
+  // away from the danger; otherwise flash toward the mouse.
+  flashTarget() {
+    const fly = this.fly;
+    const dist = this.tier.id === 'rainbow' ? FLY.flashDistanceRainbow : FLY.flashDistance;
+    let dx = null;
+    let dy = null;
+    const threat = this.director.attacks.find(
+      (a) => a.state === 'warning' && Math.hypot(fly.x - a.x, fly.y - a.y) < a.radius + 34,
+    );
+    const mouseNear = !this.lastMouse || Math.hypot(this.lastMouse.x - fly.x, this.lastMouse.y - fly.y) < 30;
+    if (threat && mouseNear) {
+      dx = fly.x - threat.x;
+      dy = fly.y - threat.y;
+      if (Math.hypot(dx, dy) < 4) {
+        const t = ROOM.table;
+        dx = fly.x - (t.x + t.w / 2);
+        dy = fly.y - (t.y + t.h / 2);
+      }
+    } else if (this.lastMouse) {
+      dx = this.lastMouse.x - fly.x;
+      dy = this.lastMouse.y - fly.y;
+      if (Math.hypot(dx, dy) < 4) {
+        dx = Math.cos(fly.heading);
+        dy = Math.sin(fly.heading);
+      }
+    } else {
+      dx = Math.cos(fly.heading);
+      dy = Math.sin(fly.heading);
+    }
+    const len = Math.hypot(dx, dy) || 1;
+    return { x: fly.x + (dx / len) * dist, y: fly.y + (dy / len) * dist };
+  }
+
+  handleFlash(input) {
+    this.lastMouse = input.steer ?? this.lastMouse;
+    if (input.flashPressed) {
+      if (this.fly.flashReady) {
+        const tgt = this.flashTarget();
+        const cd = this.tier.id === 'flame' || this.tier.id === 'rainbow' ? FLY.flashCooldownFlame : FLY.flashCooldown;
+        if (this.fly.startFlash(tgt.x, tgt.y, cd)) this.sound.dash(0.8);
+      } else {
+        this.fly.bufferFlash();
+        this.pendingFlash = true;
+      }
+    }
+    if (this.pendingFlash && this.fly.flashReady) {
+      this.pendingFlash = false;
+      const tgt = this.flashTarget();
+      const cd = this.tier.id === 'flame' || this.tier.id === 'rainbow' ? FLY.flashCooldownFlame : FLY.flashCooldown;
+      if (this.fly.startFlash(tgt.x, tgt.y, cd)) this.sound.dash(0.8);
+    }
+    // The "pop" when the flash comes back (spec 3.2).
+    const ready = this.fly.flashReady;
+    if (ready && !this.prevFlashReady) this.sound.pop();
+    this.prevFlashReady = ready;
+  }
+
+  // Per-frame escape bookkeeping: while the fly is inside an attack's
+  // shape, the attack remembers how late that was (the greed
+  // measurement); the exit frame records whether it left by flash.
+  trackEscapes() {
+    for (const atk of this.director.attacks) {
+      if (atk.state !== 'warning') continue;
+      const inside = this.flyInShape(atk, this.fly.x, this.fly.y);
+      if (inside) {
+        atk.remainMs = (atk.dur - atk.t) * 1000;
+        atk.wasInside = true;
+        atk.exitByFlash = false;
+      } else if (atk.wasInside && !atk.exited) {
+        atk.exited = true;
+        atk.exitByFlash = this.fly.flashing || this.fly.iframesT > 0;
+      }
+    }
+  }
+
+  flyInShape(atk, fx, fy) {
+    if (atk.kind === 'spray') return this.director.fanHolds(atk, fx, fy);
+    if (atk.kind === 'poke') {
+      // The corridor from Timmy's seat to the locked spot.
+      const ax = atk.fromX, ay = atk.fromY, bx = atk.x, by = atk.y;
+      const abx = bx - ax, aby = by - ay;
+      const tt = Math.max(0, Math.min(1, ((fx - ax) * abx + (fy - ay) * aby) / (abx * abx + aby * aby || 1)));
+      return Math.hypot(fx - (ax + abx * tt), fy - (ay + aby * tt)) < 26;
+    }
+    return Math.hypot(fx - atk.x, fy - atk.y) < atk.radius;
+  }
+
+  // --- impact resolution -------------------------------------------------
+
+  resolveImpact(atk) {
+    // A spilled drink makes the hand slip (E7): the impact point
+    // skids before anything is judged.
+    if (this.puddle && atk.kind === 'palm' && !atk.finale) {
+      const a = this.rng() * Math.PI * 2;
+      atk.x += Math.cos(a) * 30;
+      atk.y += Math.sin(a) * 30;
+    }
+    this.sound.thud();
+    this.shakeAmp = Math.max(this.shakeAmp, 4);
+    this.freezeT = Math.max(this.freezeT, 0.04);
+    if (atk.kind !== 'spray') this.burst(atk.x, atk.y, 12, 'rgba(214,188,150,0.85)', 120, 2.6, 0.45, 300);
+
+    const flyCaught = this.flyInShape(atk, this.fly.x, this.fly.y) && this.fly.iframesT <= 0 && this.fly.invulnT <= 0 && this.fly.squashT <= 0;
+    if (flyCaught) {
+      this.hitFly(atk);
+      if (atk.finale) this.finaleExplosion(atk, false);
       return;
     }
-
-    this.eatLogic(dt, input.buzz);
-    this.escapeLogic();
+    // Escaped — but was it a *flash* escape, or did it just wander
+    // out? Only the flash grades (spec 2.3). Tutorial attacks grade
+    // any escape as their scripted reward.
+    const flashedOut = atk.exitByFlash || this.fly.iframesT > 0 || atk.tutorial;
+    if (atk.wasInside && flashedOut) {
+      this.gradeDodge(atk);
+    } else if (atk.wasInside) {
+      this.floatText(this.fly.x, this.fly.y - 26, this.copy.ratingLabel('slipped'), '#bdb2a0', 18);
+    }
+    // The hand still lands on whatever was underneath.
+    if (atk.kind === 'palm' || atk.kind === 'poke') {
+      if (atk.finale) this.finaleExplosion(atk, true);
+      else if (atk.target && !atk.idle) this.smash(atk.target, atk, 1);
+      // Dad's newspaper comes down a second time (spec 2.7).
+      if (atk.secondPending) {
+        const { owner, x, y, target } = atk;
+        this.queueEvent(TAUNT.doubleGap, () => {
+          const second = this.director.startAttack(owner, x, y, this.elapsed, { target, noWeapon: true });
+          second.radius = 65;
+          second.dur = 0.5;
+          second.pairId = atk.id;
+          this.sound.warn();
+        });
+        atk.pairId = atk.id;
+      }
+    }
   }
 
-  eatLogic(dt, buzzing) {
-    const target = this.table.nextTarget();
-    if (!target) return;
-    const on = Math.hypot(this.fly.x - target.x, this.fly.y - target.y) < target.r;
-    if (on && !buzzing) {
-      // Landed on the dish and feeding: the fly settles (strong local
-      // damping) and the dish is eaten over its dwell time.
-      const settle = Math.exp(-6 * dt);
-      this.fly.vx *= settle;
-      this.fly.vy *= settle;
-      target.dwellProgress = Math.min(1, target.dwellProgress + dt / target.dwell);
-      this.chompT -= dt;
-      if (this.chompT <= 0) {
-        this.sound.chomp();
-        this.chompT = 0.22;
+  gradeDodge(atk) {
+    let remainMs = atk.remainMs ?? atk.dur * 1000;
+    if (this.fly.iframesT > 0) remainMs = Math.min(remainMs, PERFECT_GRACE_MS + 54);
+    let rating = RATINGS[RATINGS.length - 1];
+    const perfectWindow = atk.finale ? FINALE_PERFECT_MS : RATINGS[0].maxRemainMs;
+    for (const r of RATINGS) {
+      const win = r.id === 'perfect' ? perfectWindow : r.maxRemainMs;
+      if (remainMs <= win) {
+        rating = r;
+        break;
       }
-      if (target.dwellProgress >= 1) {
-        target.eaten = true;
-        this.grams += target.grams;
-        this.fly.weight++;
-        this.sound.eaten();
-        if (this.table.nextTarget()) {
-          this.hud.announce(`吃掉${target.name}！+${target.grams} 克，体重 ${this.fly.weight}，飞得更歪了`, 2.4);
-        } else {
-          this.escapeOpen = true;
-          this.hud.announce('全吃光了！窗户开了，快逃！', 2.6);
+    }
+    if (atk.tutorial === 'nose') rating = RATINGS[0]; // the scripted first one is always PERFECT
+    const mCombo = comboMult(this.combo);
+    let gained = 100 * rating.mult * mCombo * (this.tier.id !== 'plain' ? 1.1 : 1);
+    if (rating.id === 'perfect') gained += 50;
+    if (this.blackoutT > 0) gained *= 1.5;
+    gained = Math.round(gained);
+    if (atk.finale) {
+      // The finale pays its own way (3000 x rating x M_combo) in
+      // finaleExplosion; record the grade and take no dodge points.
+      atk.finaleRatingMult = rating.mult;
+      atk.finaleRatingId = rating.id;
+      gained = 0;
+    }
+    this.score += gained;
+
+    // Feedback per the spec's table (3.4).
+    if (rating.id === 'close') {
+      this.slowmoT = Math.max(this.slowmoT, 0.15);
+      this.slowmoVal = 0.5;
+      this.shakeAmp = Math.max(this.shakeAmp, 5);
+    } else if (rating.id === 'perfect') {
+      this.freezeT = Math.max(this.freezeT, 0.1);
+      this.slowmoT = Math.max(this.slowmoT, 0.35);
+      this.slowmoVal = 0.3;
+      this.shakeAmp = Math.max(this.shakeAmp, 8);
+      this.whiteFlashT = 0.1;
+      this.zoomT = 0.3;
+      this.zoomAmp = 0.04;
+      this.sound.perfect();
+    } else if (rating.id === 'good') {
+      this.sound.rating('good');
+    }
+    if (rating.id === 'close') this.sound.rating('close');
+
+    if (rating.id === 'close' || rating.id === 'perfect') {
+      this.director.nearMisses++;
+      this.combo++;
+      this.maxCombo = Math.max(this.maxCombo, this.combo);
+      this.lastGoodClock = this.clock;
+      this.decayAcc = 0;
+      const tier = this.tier;
+      if (tier.id !== this.lastTier) {
+        this.lastTier = tier.id;
+        this.tierPopT = 0.35;
+        this.freezeT = Math.max(this.freezeT, 0.08);
+        this.floatText(this.fly.x, this.fly.y - 40, tier.label, '#ffd94d', 30);
+        this.sound.comboUp();
+        if (tier.id === 'rainbow') this.unlock('rainbowFly');
+      }
+    } else if (rating.id === 'good') {
+      this.lastGoodClock = this.clock;
+      this.decayAcc = 0;
+    }
+    if (rating.id === 'perfect' && this.blackoutT > 0) this.unlock('blackoutPerfect');
+    // Dad's double: both halves Close or better pays a bonus.
+    if (atk.pairId) {
+      this.pairRatings ??= new Map();
+      const prev = this.pairRatings.get(atk.pairId);
+      if (prev && (prev === 'close' || prev === 'perfect') && (rating.id === 'close' || rating.id === 'perfect')) {
+        this.score += 300;
+        this.floatText(atk.x, atk.y - 70, this.copy.ratingLabel('double'), '#3FE0FF', 30);
+      }
+      this.pairRatings.set(atk.pairId, rating.id);
+    }
+    const label = this.copy.ratingLabel(rating.id);
+    if (label) {
+      const colors = { perfect: '#FF3FA4', close: '#3FE0FF', good: '#5FD3B5', early: '#bdb2a0' };
+      const sizes = { perfect: 46, close: 34, good: 26, early: 18 };
+      this.floatText(this.fly.x, this.fly.y - 34, label, colors[rating.id], sizes[rating.id]);
+    }
+    if (gained > 0) this.floatText(atk.x, atk.y + 40, `+${gained}`, '#FFC94A', 21, { flyTo: true });
+  }
+
+  hitFly(atk) {
+    const tutorial = !!atk.tutorial;
+    if (!tutorial) {
+      this.hp--;
+      if (this.combo > 0 && this.tier.id !== 'plain') this.sound.poof();
+      this.combo = 0;
+      this.lastTier = 'plain';
+    }
+    this.fly.squash();
+    this.sound.splat();
+    this.freezeT = Math.max(this.freezeT, 0.15);
+    this.shakeAmp = Math.max(this.shakeAmp, 12);
+    this.redFlashT = 0.3;
+    this.floatText(this.fly.x, this.fly.y - 30, this.copy.ratingLabel('splat'), '#FF5A4E', 32);
+    if (this.hp <= 0 && !tutorial) {
+      this.endReason = 'GAME OVER';
+      this.resultsAt = this.clock + 1.0;
+    }
+  }
+
+  // --- the chain engine (spec 2.5) ----------------------------------------
+
+  addChaos(points, depth, x, y) {
+    const chainMult = 1 + 0.5 * (depth - 1);
+    const gained = Math.round(points * chainMult * comboMult(this.combo));
+    this.score += gained;
+    this.chaosTotal += points * chainMult;
+    if (depth >= 2) {
+      this.longestChain = Math.max(this.longestChain, depth);
+      this.chainPop = { n: depth, t: 0 };
+      if (depth >= 5) this.unlock('dominoDinner');
+      this.sound.chain();
+    }
+    this.floatText(x, y - 18, `+${gained}`, '#FFC94A', 19, { flyTo: true });
+    return gained;
+  }
+
+  quipAt(human, text) {
+    this.floatText(human.x, human.y - 62, text, '#ffffff', 22, { bubble: true });
+  }
+
+  // Fire one object's chain event. depth starts at 1 for the thing
+  // directly under the hand.
+  smash(target, atk, depth) {
+    const { x, y } = atk;
+    switch (target.kind) {
+      case 'head': return this.eventHead(target.ref, atk, depth);
+      case 'soup': return this.eventSoup(target.ref, atk, depth);
+      case 'fork':
+      case 'knife': return this.eventCutlery(target.ref, atk, depth);
+      case 'cup':
+      case 'teacup': return this.eventCup(target.ref, atk, depth);
+      case 'greens':
+      case 'chicken': return this.eventFoodHat(target.ref, target.kind, atk, depth);
+      case 'cake': return this.eventCake(target.ref, atk, depth);
+      case 'dog': return this.eventDog(atk, depth);
+      default: {
+        // Plates, bowls, the teapot and the rest: honest breakage.
+        if (target.ref) {
+          target.ref.state = 'smashed';
+          target.ref.stateT = 0;
+          this.addChaos(40, depth, x, y);
+          this.burst(x, y, 12, '#f0ead8', 130, 2.6, 0.5, 600);
         }
       }
-    } else if (!on) {
-      target.dwellProgress = Math.max(0, target.dwellProgress - dt * 0.35);
     }
-    // On the dish but buzzing (taking off): progress holds as it is.
   }
 
-  escapeLogic() {
-    if (!this.escapeOpen || this.state !== 'playing') return;
-    const w = this.table.window;
-    if (this.fly.x > w.x - 8 && this.fly.x < w.x + w.w + 8 && this.fly.y < w.y + w.h + 16) {
-      this.state = 'won';
-      this.fly.escaped = true;
-      this.sound.escape();
-      this.sound.buzz(0, false);
+  eventHead(h, atk, depth, bypassCd = false) {
+    if (!bypassCd && !this.eventReady(h, EVENTS.head.cooldown)) return;
+    this.addChaos(EVENTS.head.chaos, depth, h.x, h.y);
+    h.palmPrint = true;
+    h.expression = 'slapped';
+    h.exprT = 1.2;
+    h.angryT = 3;
+    h.stateT = 0;
+    this.events.palmPrint = true;
+    this.burst(h.x, h.y, 10, 'rgba(240,180,120,0.9)', 90, 2.4, 0.4, 300);
+    const selfHit = atk.owner === h;
+    this.quipAt(h, this.copy.quipFor(selfHit ? 'selfOwn' : 'head'));
+    if (selfHit && h.name === 'Dad') this.unlock('dadSlapsDad');
+    if (h.name === 'Dad' && !h.glassesOff) {
+      h.glassesOff = true;
+      this.events.glasses = true;
+      this.flyProjectile('glasses', h.x, h.y, h.x - 110, h.y - 120);
     }
+    if (h.name === 'Grandpa' && !h.denturesOut) {
+      // E5: the dentures go on a bouncing tour of the table.
+      h.denturesOut = true;
+      this.events.dentures = true;
+      this.addChaos(EVENTS.dentures.chaos, depth, h.x, h.y);
+      this.quipAt(h, this.copy.quipFor('dentures'));
+      this.unlock('runawayDentures');
+      this.denturesTour(h, depth);
+    }
+    // Derivation (40%): the neighbour takes offence and slaps back.
+    if (this.rng() < 0.4) {
+      const idx = this.table.humans.indexOf(h);
+      const neighbour = this.table.humans[(idx + 1) % this.table.humans.length];
+      this.queueEvent(0.3, () => {
+        if (this.state !== 'playing') return;
+        neighbour.angryT = 3;
+        this.brawlCount++;
+        if (this.brawlCount >= 3) this.unlock('familyBrawl');
+        this.quipAt(neighbour, this.copy.quipFor('brawl'));
+        this.eventHead(h, { ...atk, owner: neighbour }, depth + 1, true);
+      });
+    }
+  }
+
+  denturesTour(h, depth) {
+    // Three bounces, each a small impact that can set off whatever
+    // it lands on (50% each).
+    let px = h.x;
+    let py = h.y;
+    for (let i = 0; i < 3; i++) {
+      const nx = px + (this.rng() - 0.3) * 220;
+      const ny = py + (this.rng() - 0.5) * 200;
+      const fx = nx;
+      const fy = ny;
+      this.queueEvent(0.28 * (i + 1), () => {
+        this.flyProjectile('dentures', px, py, fx, fy);
+        this.burst(fx, fy, 5, '#ffffff', 60, 2, 0.3, 400);
+        if (this.rng() < 0.5) {
+          const prop = this.table.propAt(fx, fy);
+          if (prop && prop.kind !== 'head') this.smash(prop, { x: fx, y: fy, owner: h }, depth + 1);
+        }
+      });
+      px = nx;
+      py = ny;
+    }
+    this.queueEvent(0.28 * 4, () => this.landedProps.push({ kind: 'dentures', x: px, y: py, rot: 0.4 }));
+  }
+
+  eventSoup(soup, atk, depth) {
+    if (!this.eventReady(soup, EVENTS.soup.cooldown)) return;
+    this.addChaos(EVENTS.soup.chaos, depth, soup.x, soup.y);
+    soup.state = 'empty';
+    soup.stateT = 0;
+    this.soupRefillAt = this.clock + EVENTS.soup.cooldown;
+    this.burst(soup.x, soup.y, 26, '#E8743B', 190, 3.4, 0.7, 600);
+    this.burst(soup.x, soup.y, 10, '#FFC94A', 140, 2.4, 0.6, 600);
+    // The splash finds the nearest other face within reach.
+    let best = null;
+    let bd = Infinity;
+    for (const h of this.table.humans) {
+      const d = Math.hypot(h.x - soup.x, h.y - soup.y);
+      if (d < bd) {
+        bd = d;
+        best = h;
+      }
+    }
+    if (best && bd < 200) {
+      best.soupFace = true;
+      best.blockedT = Math.max(best.blockedT, 3); // standing, dripping, useless
+      best.expression = 'scared';
+      best.exprT = 1.4;
+      best.stateT = 0;
+      this.events.soupFace = true;
+      this.quipAt(best, this.copy.quipFor('soup', best.name));
+      if (best.name === 'Mom') this.unlock('soupBun');
+      // Derivation (60%): the victim bumps the table; something hops.
+      if (this.rng() < 0.6) {
+        this.queueEvent(0.3, () => {
+          const fresh = this.table.dressing.filter((d) => d.state === 'fresh');
+          if (fresh.length) {
+            const d = fresh[Math.floor(this.rng() * fresh.length)];
+            d.hopT = 0.35;
+            this.burst(d.x, d.y - 6, 4, 'rgba(200,170,120,0.8)', 50, 2, 0.3, 400);
+          }
+        });
+      }
+    }
+  }
+
+  eventCutlery(item, atk, depth) {
+    if (!this.eventReady(item, EVENTS.cutlery.cooldown)) return;
+    this.addChaos(EVENTS.cutlery.chaos, depth, item.x, item.y);
+    item.state = 'smashed'; // airborne, then gone from its spot
+    item.stateT = 0;
+    this.events.forkChain = true;
+    this.floatText(item.x, item.y - 30, this.copy.quipFor('cutlery'), '#ffffff', 21, { bubble: true });
+    // Derivation: up into the lamp (20%), or down onto a new victim.
+    const roll = this.rng();
+    const ang = this.rng() * Math.PI * 2;
+    const lx = item.x + Math.cos(ang) * 260;
+    const ly = item.y + Math.sin(ang) * 200;
+    if (roll < 0.2 && !this.table.lampDropped && this.eventCd.get('lamp') === undefined) {
+      this.flyProjectile('fork', item.x, item.y, this.table.lamp.x, this.table.lamp.y, () => this.eventLamp(depth + 1));
+    } else {
+      this.flyProjectile('fork', item.x, item.y, lx, ly, () => {
+        const prop = this.table.propAt(lx, ly);
+        if (prop && this.rng() < 0.7) {
+          if (prop.kind === 'cake') this.unlock('forkCake');
+          this.smash(prop, { x: lx, y: ly, owner: atk.owner }, depth + 1);
+        } else {
+          this.landedProps.push({ kind: 'fork', x: lx, y: ly, rot: ang });
+        }
+      });
+    }
+  }
+
+  eventLamp(depth) {
+    if (this.table.lampDropped) return;
+    this.eventCd.set('lamp', Infinity);
+    this.addChaos(EVENTS.lamp.chaos, depth, this.table.lamp.x, this.table.lamp.y + 30);
+    this.table.lampSwingT = 3;
+    this.floatText(this.table.lamp.x, this.table.lamp.y + 52, this.copy.quipFor('lamp'), '#ffffff', 22, { bubble: true });
+    // Derivation (15%): it comes down on the table's centre.
+    if (this.rng() < 0.15) {
+      this.queueEvent(0.3, () => {
+        this.table.lampDropped = true;
+        this.unlock('chandelierDrop');
+        this.floatText(this.table.lamp.x, this.table.lamp.y + 52, this.copy.quipFor('lampDrop'), '#ffffff', 22, { bubble: true });
+        const t = this.table.rect;
+        const prop = this.table.propAt(t.x + t.w / 2, t.y + t.h / 2);
+        if (prop) this.smash(prop, { x: t.x + t.w / 2, y: t.y + t.h / 2, owner: null }, depth + 1);
+        this.shakeAmp = Math.max(this.shakeAmp, 8);
+      });
+    }
+  }
+
+  eventCup(cup, atk, depth) {
+    if (!this.eventReady(cup, EVENTS.cup.cooldown)) return;
+    this.addChaos(EVENTS.cup.chaos, depth, cup.x, cup.y);
+    cup.state = 'smashed';
+    cup.stateT = 0;
+    this.puddle = { x: cup.x, y: cup.y, t: 3 };
+    this.burst(cup.x, cup.y, 12, '#c98a3d', 130, 2.4, 0.5, 600);
+    this.floatText(cup.x, cup.y - 28, this.copy.quipFor('cup'), '#ffffff', 20, { bubble: true });
+  }
+
+  eventFoodHat(food, kind, atk, depth) {
+    if (!this.eventReady(food, EVENTS.food.cooldown)) return;
+    this.addChaos(EVENTS.food.chaos, depth, food.x, food.y);
+    food.state = 'smashed';
+    food.stateT = 0;
+    this.burst(food.x, food.y, 18, food.color, 160, 3, 0.6, 600);
+    // The dish lands on the nearest head, as a hat.
+    let best = null;
+    let bd = Infinity;
+    for (const h of this.table.humans) {
+      const d = Math.hypot(h.x - food.x, h.y - food.y);
+      if (d < bd) {
+        bd = d;
+        best = h;
+      }
+    }
+    if (best) {
+      const victim = best;
+      this.flyProjectile(kind === 'greens' ? 'greens' : 'chicken', food.x, food.y, victim.x, victim.y - 20, () => {
+        victim.hatKind = kind;
+        victim.stateT = 0;
+        this.quipAt(victim, this.copy.quipFor(kind === 'greens' ? 'foodHat' : 'chickenHat'));
+        // Derivation (50%): wearing dinner counts as being slapped.
+        if (this.rng() < 0.5) this.queueEvent(0.3, () => this.eventHead(victim, atk, depth + 1));
+      });
+    }
+  }
+
+  eventCake(cake, atk, depth) {
+    if (atk.finale) return; // the finale has its own resolution
+    if (!this.eventReady(cake, EVENTS.candle.cooldown)) return;
+    this.addChaos(EVENTS.candle.chaos, depth, cake.x, cake.y);
+    // E9: one candle out, a little cream, the cake itself stands.
+    if (cake.candlesLit > 0) cake.candlesLit--;
+    cake.creamSplats++;
+    cake.stateT = 0;
+    this.burst(cake.x, cake.y, 14, '#FFD1DC', 140, 2.8, 0.55, 600);
+    this.floatText(cake.x, cake.y - 60, this.copy.quipFor('candle'), '#ffffff', 21, { bubble: true });
+  }
+
+  eventDog(atk, depth) {
+    if (!this.dog || this.dog.state !== 'idle') return;
+    this.addChaos(EVENTS.dog.chaos, depth, this.dog.x, this.dog.y);
+    this.unlock('dogTable');
+    this.floatText(this.dog.x, this.dog.y - 44, this.copy.quipFor('dog'), '#ffffff', 22, { bubble: true });
+    // The dog bolts across the table with the chicken, knocking
+    // everything it passes (80% each).
+    this.dog.state = 'run';
+    this.dog.dirX = this.dog.x < 640 ? 1 : -1;
+    const chicken = this.table.foods[3];
+    if (chicken.state === 'fresh') {
+      chicken.state = 'smashed';
+      chicken.stateT = 0;
+    }
+  }
+
+  finaleExplosion(atk, dodged) {
+    const cake = this.table.foods[2];
+    cake.state = 'smashed';
+    cake.stateT = 0;
+    this.finaleDone = true;
+    this.events.cakeBoom = true;
+    this.burst(cake.x, cake.y, 40, '#FFFFFF', 300, 4.2, 0.9, 600);
+    this.burst(cake.x, cake.y, 40, '#FFD1DC', 260, 3.6, 0.85, 600);
+    this.burst(cake.x, cake.y, 20, '#FF5A4E', 200, 3, 0.7, 600);
+    this.slowmoT = Math.max(this.slowmoT, 1.0);
+    this.slowmoVal = 0.4;
+    this.whiteFlashT = 0.16;
+    this.shakeAmp = 18;
+    this.zoomT = 0.45;
+    this.zoomAmp = 0.08;
+    this.sound.explosion();
+    if (dodged) {
+      // gradeDodge already ran for the finale attack and used the
+      // widened window; the finale's own score lands here.
+      const ratingMult = atk.finaleRatingMult ?? 1;
+      const gained = Math.round(GAME.finaleBase * ratingMult * comboMult(this.combo));
+      this.score += gained;
+      this.floatText(cake.x, cake.y - 96, this.copy.quipFor('finalePerfect'), '#FF3FA4', 40);
+      this.floatText(cake.x, cake.y + 60, `+${gained}`, '#FFC94A', 26, { flyTo: true });
+      if (atk.finaleRatingId === 'perfect') this.unlock('cakePocalypse');
+    } else {
+      this.score += GAME.finaleSplatScore;
+      this.floatText(cake.x, cake.y - 96, this.copy.finale.splatButCake.draw(), '#ffffff', 24, { bubble: true });
+    }
+    this.resultsAt = this.clock + 2.2;
+    this.endReason = "TIME'S UP!";
+  }
+
+  // --- landing & taunting (spec 3.3 / 2.2) ---------------------------------
+
+  landingLogic(dt) {
+    const fly = this.fly;
+    // What's under the fly? The dog outranks the dishes.
+    let zone = null;
+    if (this.dog && this.dog.state === 'idle' && Math.hypot(fly.x - this.dog.x, fly.y - this.dog.y) < 46) {
+      zone = { kind: 'dog', ref: this.dog, x: this.dog.x, y: this.dog.y, r: 34 };
+    } else {
+      zone = this.table.propAt(fly.x, fly.y);
+    }
+    this.hoverZone = zone && fly.landedOn !== zone ? zone : null;
+
+    const canLand = zone && fly.speed < FLY.landSpeed && !fly.flashing && fly.squashT <= 0;
+    if (canLand) {
+      this.landClock += dt;
+      if (this.landClock >= FLY.landTime && fly.landedOn !== zone) {
+        fly.landedOn = zone;
+        this.tauntClock = 0;
+        this.sound.land();
+      }
+    } else {
+      this.landClock = 0;
+      if (fly.landedOn && (!zone || fly.landedOn !== zone || fly.speed > FLY.landSpeed * 1.6)) {
+        fly.landedOn = null;
+        this.tauntClock = 0;
+      }
+    }
+
+    // The taunt itself: sit, rub hands, wait out the delay, and
+    // somebody's patience snaps.
+    if (fly.landedOn && this.tutorial === 'done') {
+      this.idleClock = 0;
+      this.tauntClock += dt;
+      const timing = timingAt(this.elapsed);
+      const finale = this.finaleArmed && fly.landedOn.kind === 'cake' && !this.finaleTriggered;
+      if (this.tauntClock >= timing.tauntDelay && this.director.freeSlot(this.elapsed) && this.doorbellT <= 0) {
+        const target = fly.landedOn;
+        const owner = target.kind === 'head'
+          ? (target.ref.cooldownT <= 0 && target.ref.blockedT <= 0 ? target.ref : this.director.nearestHuman(target.x, target.y, true))
+          : this.director.nearestHuman(target.x, target.y, true);
+        if (owner) {
+          this.tauntClock = 0;
+          const atk = this.director.startAttack(owner, target.x, target.y, this.elapsed, { target, finale });
+          if (this.table.lampSwingT > 0) atk.dur += 0.3; // E4's wobble buys everyone time
+          if (finale) {
+            this.finaleTriggered = true;
+            this.hud.announce(this.copy.finale.allHands.draw(), 1.2);
+          }
+          this.sound.warn();
+          if (atk.kind === 'spray') this.sound.sprayWarn();
+        }
+      }
+    } else if (this.tutorial === 'done') {
+      // Idle punishment (spec 2.2): hover smugly for 3s and the
+      // nearest free human slaps at the empty air where you float.
+      const anyWarning = this.director.attacks.some((a) => a.state === 'warning');
+      if (!anyWarning) {
+        this.idleClock += dt;
+        if (this.idleClock >= TAUNT.idleAfter && this.director.freeSlot(this.elapsed) && this.doorbellT <= 0) {
+          this.idleClock = 0;
+          const owner = this.director.nearestHuman(fly.x, fly.y, true);
+          if (owner) {
+            this.director.startAttack(owner, fly.x, fly.y, this.elapsed, { idle: true, warnScale: TAUNT.idleWarnScale, noWeapon: true });
+            this.sound.warn();
+          }
+        }
+      } else {
+        this.idleClock = 0;
+      }
+    }
+  }
+
+  comboLogic(dt) {
+    // Decay (spec 2.4): 4s without a Good+ dodge, then -1 per 0.8s.
+    if (this.combo <= 0) return;
+    if (this.clock - this.lastGoodClock <= COMBO.decayAfter) {
+      this.decayAcc = 0;
+      return;
+    }
+    this.decayAcc += dt;
+    if (this.decayAcc >= COMBO.decayStep) {
+      this.decayAcc = 0;
+      const before = this.tier.id;
+      this.combo--;
+      if (this.tier.id !== before) {
+        this.lastTier = this.tier.id;
+        this.sound.poof();
+        this.burst(this.fly.x, this.fly.y, 10, '#ffd94d', 80, 2.4, 0.4, 200);
+      }
+      if (this.combo === 0) this.floatText(this.fly.x, this.fly.y - 30, 'Combo lost', '#bdb2a0', 19);
+    }
+  }
+
+  // --- the dog (random event, E6) ------------------------------------------
+
+  dogLogic(dt) {
+    if (!this.dog) return;
+    const dog = this.dog;
+    dog.t -= dt;
+    if (dog.state === 'idle') {
+      // Amble toward the chicken.
+      const chicken = this.table.foods[3];
+      const dx = chicken.x - dog.x;
+      const dy = chicken.y - dog.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 30) {
+        dog.x += (dx / d) * 26 * dt;
+        dog.y += (dy / d) * 26 * dt;
+      }
+      if (dog.t <= 0) this.dog = null; // wandered off, unbothered
+    } else if (dog.state === 'run') {
+      dog.x += dog.dirX * 520 * dt;
+      dog.checkT -= dt;
+      if (dog.checkT <= 0) {
+        dog.checkT = 0.09;
+        const prop = this.table.propAt(dog.x, dog.y);
+        if (prop && prop.kind !== 'dog' && this.rng() < 0.8) {
+          this.smash(prop, { x: dog.x, y: dog.y, owner: null }, 1);
+        }
+      }
+      if (dog.x < -60 || dog.x > VIEW.width + 60) this.dog = null;
+    }
+  }
+
+  // --- phases, weapons, random events, the finale ---------------------------
+
+  phaseLogic() {
+    const e = this.elapsed;
+    if (this.tutorial !== 'done') return;
+    if (!this.weaponFlags.spray && e >= TAUNT.sprayAt) {
+      this.weaponFlags.spray = true;
+      this.hud.announce(this.copy.weapon.spray.draw(), 2.2);
+      this.sound.ding();
+    }
+    if (!this.weaponFlags.swatter && e >= TAUNT.swatterAt) {
+      this.weaponFlags.swatter = true;
+      this.hud.announce(this.copy.weapon.swatter.draw(), 2.2);
+      this.sound.ding();
+    }
+    if (!this.weaponFlags.late && e >= TAUNT.doubleAt) {
+      this.weaponFlags.late = true;
+      this.hud.announce(this.copy.weapon.allUp.draw(), 2.2);
+      this.sound.ding();
+      this.sound.startSong();
+    }
+    // Random events on the spec's schedule (2.8).
+    if (this.randomIdx < RANDOM_EVENTS.times.length && e >= RANDOM_EVENTS.times[this.randomIdx]) {
+      this.randomIdx++;
+      this.fireRandomEvent();
+    }
+    if (this.finaleArmed && !this.finaleAnnounced) {
+      this.finaleAnnounced = true;
+      this.hud.announce(this.copy.finale.awaits.draw() + ' Land on it. If you dare.', 2.6);
+    }
+    if (e >= PHASES.finaleTriggerBy && !this.finaleTriggered && !this.finaleDone) {
+      // 89s and nobody took the bait: the family does it themselves.
+      this.finaleTriggered = true;
+      const cake = this.table.foods[2];
+      cake.state = 'smashed';
+      cake.stateT = 0;
+      this.finaleDone = true;
+      this.events.cakeBoom = true;
+      this.burst(cake.x, cake.y, 34, '#FFD1DC', 240, 3.6, 0.8, 600);
+      this.hud.announce(this.copy.finale.missed.draw() + ' The cake collapsed without you.', 2.4);
+      this.sound.explosion();
+    }
+  }
+
+  fireRandomEvent() {
+    const pool = RANDOM_EVENTS.pool.filter((p) => (this.randomUsed.get(p.id) ?? 0) < 2 && p.id !== this.lastRandom);
+    const total = pool.reduce((s, p) => s + p.weight, 0);
+    let roll = this.rng() * total;
+    let picked = pool[0];
+    for (const p of pool) {
+      roll -= p.weight;
+      if (roll <= 0) {
+        picked = p;
+        break;
+      }
+    }
+    this.lastRandom = picked.id;
+    this.randomUsed.set(picked.id, (this.randomUsed.get(picked.id) ?? 0) + 1);
+    const say = (key) => this.hud.announce(this.copy.randomEvent[key].draw(), 2.0);
+    if (picked.id === 'dog') {
+      say('dog');
+      const t = this.table.rect;
+      this.dog = { x: t.x + 30, y: t.y + t.h - 30, state: 'idle', t: 10, dirX: 1, checkT: 0 };
+    } else if (picked.id === 'blackout') {
+      say('blackout');
+      this.blackoutT = 4;
+    } else if (picked.id === 'doorbell') {
+      say('doorbell');
+      this.doorbellT = 2;
+      this.queueEvent(2.05, () => {
+        if (this.state === 'playing') this.hud.announce(this.copy.randomEvent.doorbellBack.draw(), 1.8);
+      });
+    } else if (picked.id === 'sneeze') {
+      say('sneeze');
+      const grandpa = this.table.humans[1];
+      const dx = this.fly.x - grandpa.x;
+      const dy = this.fly.y - grandpa.y;
+      const len = Math.hypot(dx, dy) || 1;
+      this.fly.vx += (dx / len) * 640;
+      this.fly.vy += (dy / len) * 640;
+      const cake = this.table.foods[2];
+      cake.candlesLit = Math.max(0, cake.candlesLit - 2);
+      this.score += 200;
+      this.floatText(this.fly.x, this.fly.y - 30, '+200', '#FFC94A', 20, { flyTo: true });
+      this.sound.sneeze();
+    } else if (picked.id === 'photo') {
+      say('photo');
+      this.photoT = 1.5;
+      for (const h of this.table.humans) h.blockedT = Math.max(h.blockedT, 1.5);
+      this.queueEvent(1.5, () => {
+        if (this.state !== 'playing') return;
+        this.whiteFlashT = Math.max(this.whiteFlashT, 0.12);
+        const onFace = this.table.humans.some((h) => Math.hypot(this.fly.x - h.x, this.fly.y - h.y) < h.headR);
+        if (onFace) {
+          this.score += 500;
+          this.unlock('photobomb');
+          this.floatText(this.fly.x, this.fly.y - 36, this.copy.randomEvent.photobomb.draw(), '#ffd94d', 26);
+        }
+      });
+    }
+  }
+
+  // --- the tutorial (spec 3.5) ----------------------------------------------
+
+  tutorialLogic(dt) {
+    if (this.tutorial === 'done') return;
+    const dad = this.table.humans[3];
+    if (this.tutorial === 'quick') {
+      if (this.tutPhase === 'nose' && this.clock > 0.4 && !this.tutAttack) {
+        this.tutAttack = this.director.startAttack(dad, dad.x, dad.y, 0, { target: { kind: 'head', ref: dad, x: dad.x, y: dad.y, r: dad.headR }, noWeapon: true });
+        this.tutAttack.tutorial = 'quick';
+        this.sound.warn();
+        this.floatText(640, 210, META.runs > 0 ? this.copy.roundIntro.draw() : '', '#ffffff', 26);
+      }
+      if (this.tutPhase === 'nose' && this.tutAttack && this.tutAttack.state === 'done') {
+        this.tutorial = 'done';
+        this.tutPhase = 'done';
+      }
+      return;
+    }
+    // The full first-run script.
+    if (this.tutPhase === 'nose') {
+      dad.expression = 'angry';
+      if (this.clock > 0.4 && !this.tutAttack) {
+        this.tutAttack = this.director.startAttack(dad, dad.x, dad.y, 0, { target: { kind: 'head', ref: dad, x: dad.x, y: dad.y, r: dad.headR }, noWeapon: true });
+        this.tutAttack.tutorial = 'nose';
+        this.tutAttack.dur = 1.4;
+        this.sound.warn();
+      }
+      if (this.tutAttack && this.tutAttack.state === 'done') {
+        // Whether it landed or not, the show moves on: the soup
+        // ghost path lights up. (A hit in the tutorial costs no HP —
+        // hitFly knows — and Dad still wears the handprint story.)
+        this.tutPhase = 'soup';
+        this.tutAttack = null;
+        this.ghostTarget = this.table.foods[1];
+        for (const h of this.table.humans) {
+          h.expression = 'scared';
+          h.exprT = 1.2;
+        }
+      }
+    } else if (this.tutPhase === 'soup') {
+      const soup = this.table.foods[1];
+      if (this.fly.landedOn && this.fly.landedOn.ref === soup && !this.tutAttack) {
+        const mom = this.table.humans[0];
+        this.tutAttack = this.director.startAttack(mom, soup.x, soup.y, 0, { target: { kind: 'soup', ref: soup, x: soup.x, y: soup.y, r: soup.r }, noWeapon: true });
+        this.tutAttack.tutorial = 'soup';
+        this.tutAttack.dur = 1.4;
+        this.ghostTarget = null;
+        this.sound.warn();
+      }
+      if (this.tutAttack && this.tutAttack.state === 'done') {
+        if (soup.state === 'fresh' && !this.events.soupFace) {
+          // The scripted splash belongs on Timmy: if the natural
+          // resolution didn't produce it, stage it now.
+          const timmy = this.table.humans[2];
+          this.events.soupFace = true;
+          timmy.soupFace = true;
+          timmy.blockedT = 3;
+          timmy.expression = 'scared';
+          timmy.exprT = 1.4;
+          this.quipAt(timmy, this.copy.quipFor('soup', 'Timmy'));
+          soup.state = 'empty';
+          soup.stateT = 0;
+          this.soupRefillAt = this.clock + EVENTS.soup.cooldown;
+          this.addChaos(EVENTS.soup.chaos, 1, soup.x, soup.y);
+          // ...and his flail knocks a fork into orbit: CHAIN x2.
+          const fork = this.table.dressing.find((d) => d.kind === 'fork' && d.state === 'fresh');
+          if (fork) {
+            this.queueEvent(0.3, () => this.eventCutlery(fork, { x: fork.x, y: fork.y, owner: timmy }, 2));
+          }
+        }
+        this.tutPhase = 'done';
+        this.tutorial = 'done';
+        this.ghostTarget = null;
+        this.hud.announce('Ruin the party!', 1.6);
+        this.queueEvent(1.7, () => {
+          if (this.state === 'playing') this.hud.announce('90 SECONDS. GO!', 1.4);
+        });
+      }
+    }
+  }
+
+  // The tutorial/finale slow-motion hint the frame loop applies.
+  get tsHint() {
+    if (this.tutorial === 'script' && this.tutPhase === 'nose' && this.tutAttack && this.tutAttack.state === 'warning') {
+      const remainMs = (this.tutAttack.dur - this.tutAttack.t) * 1000;
+      this.showKeycap = remainMs < 500 && !this.tutAttack.exited;
+      // Near-freeze only in the last stretch, and only until the
+      // dodge happens — then time snaps back (spec 3.5).
+      if (remainMs < 200 && !this.tutAttack.exited && !this.fly.flashing) {
+        return Math.max(0.05, 0.05 + ((remainMs - 60) / 140) * 0.45);
+      }
+    }
+    if (this.tutorial === 'script' && this.tutPhase === 'soup' && this.tutAttack && this.tutAttack.state === 'warning') {
+      const remainMs = (this.tutAttack.dur - this.tutAttack.t) * 1000;
+      this.showKeycap = remainMs < 260 && remainMs > 120 && !this.tutAttack.exited;
+      if (remainMs <= 200 && !this.tutAttack.exited && !this.fly.flashing) return 0.4;
+    }
+    // The finale's last 400ms crawl (spec 2.9).
+    const finaleAtk = this.director.attacks.find((a) => a.finale && a.state === 'warning');
+    if (finaleAtk && (finaleAtk.dur - finaleAtk.t) * 1000 < 400) {
+      this.showKeycap = false;
+      return 0.25;
+    }
+    this.showKeycap = false;
+    return 1;
+  }
+
+  expressionLogic() {
+    const destruction = this.destruction01;
+    for (const h of this.table.humans) {
+      if (h.exprT > 0) continue; // a set-piece expression holds
+      if (this.photoT > 0) h.expression = 'happy';
+      else if (h.angryT > 0) h.expression = 'angry';
+      else if (this.director.attacks.some((a) => a.state === 'warning' && a.owner === h)) h.expression = 'angry';
+      else if (destruction >= 0.6) h.expression = 'angry';
+      else if (destruction >= 0.3) h.expression = 'suspicious';
+      else h.expression = 'happy';
+    }
+  }
+
+  // --- results ----------------------------------------------------------------
+
+  finish(reason = '') {
+    if (this.state === 'results') return;
+    this.state = 'results';
+    this.finishTime = this.time;
+    this.endReason = reason || this.endReason;
+    this.lifeBonus = Math.max(0, this.hp) * GAME.lifeBonus;
+    this.score += this.lifeBonus;
+    this.sound.stopSong();
+    this.sound.buzz(false);
+    const rank = GAME.ranks.find((r) => this.score >= r.min) ?? GAME.ranks[GAME.ranks.length - 1];
+    this.rank = rank;
+    this.caption = this.copy.caption[rank.id].draw();
+    // The "so close" line, by the spec's priority (2.11): one line.
+    const idx = GAME.ranks.indexOf(rank);
+    const nextRank = idx > 0 ? GAME.ranks[idx - 1] : null;
+    const nextTier = COMBO.tiers.find((t) => t.at > this.maxCombo);
+    if (nextRank && nextRank.min - this.score <= nextRank.min * 0.2) {
+      this.nearMissLine = `Only ${nextRank.min - this.score} pts from ${nextRank.id} rank!`;
+    } else if (nextTier && nextTier.at - this.maxCombo <= 2) {
+      const names = { gold: 'GOLDEN FLY', flame: 'FIRE FLY', rainbow: 'RAINBOW FLY' };
+      this.nearMissLine = `${nextTier.at - this.maxCombo} more combo to become ${names[nextTier.id]}!`;
+    } else if (META.best > this.score && META.best - this.score <= META.best * 0.1) {
+      this.nearMissLine = `Just ${META.best - this.score} pts short of your best!`;
+    } else {
+      const left = GALLERY.filter((g) => !META.gallery.has(g.id)).length;
+      this.nearMissLine = left > 0 ? `${left} disasters still undiscovered...` : 'Every disaster discovered. A complete monster.';
+    }
+    if (this.score > META.best) {
+      this.newBest = true;
+      META.best = this.score;
+    }
+    META.runs++;
+    persistMeta();
+  }
+
+  // --- ambient systems ----------------------------------------------------------
+
+  stepFx(dt) {
+    for (const p of this.particles) {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += (p.grav ?? 0) * dt;
+      p.vx *= Math.exp(-2.2 * dt);
+      p.vy *= Math.exp(-0.6 * dt);
+    }
+    this.particles = this.particles.filter((p) => p.life > 0);
+    for (const t of this.texts) {
+      t.t += dt;
+      if (t.flyTo) {
+        const k = Math.min(1, t.t / 0.4);
+        t.x += (VIEW.width - 110 - t.x) * k * dt * 9;
+        t.y += (42 - t.y) * k * dt * 9;
+      } else {
+        t.y -= 30 * dt;
+      }
+    }
+    this.texts = this.texts.filter((t) => t.t < t.life);
+    const done = [];
+    for (const pr of this.projectiles) {
+      pr.t += dt;
+      const k = Math.min(1, pr.t / pr.dur);
+      pr.x = pr.fromX + (pr.toX - pr.fromX) * k;
+      pr.y = pr.fromY + (pr.toY - pr.fromY) * k - Math.sin(k * Math.PI) * pr.peak;
+      pr.rot += dt * 9;
+      if (k >= 1) done.push(pr);
+    }
+    for (const pr of done) {
+      this.projectiles.splice(this.projectiles.indexOf(pr), 1);
+      if (pr.onArrive) pr.onArrive();
+      else this.landedProps.push({ kind: pr.kind, x: pr.toX, y: pr.toY, rot: pr.rot });
+    }
+    for (const d of this.table.dressing) if (d.hopT) d.hopT = Math.max(0, d.hopT - dt);
   }
 
   draw(dt) {
@@ -128,7 +1236,7 @@ class Game {
   }
 }
 
-// --- boot ------------------------------------------------------------
+// --- boot ---------------------------------------------------------------------
 
 const canvas = document.getElementById('game');
 const params = new URLSearchParams(location.search);
@@ -143,6 +1251,11 @@ if (!shotName) game.newRun(runSeed);
 if (shotName) {
   applyPose(game, shotName);
   game.draw(0);
+  // The results photos load async; repaint once they arrive so a
+  // posed results shot shows the real print, not the fallback.
+  for (const img of [game.hud.photoClean, game.hud.photoRuined]) {
+    if (img && !img.complete) img.addEventListener('load', () => game.draw(0));
+  }
 } else {
   game.state = 'title';
   let last = performance.now();
@@ -150,26 +1263,54 @@ if (shotName) {
   const frame = (now) => {
     const delta = Math.min(0.1, (now - last) / 1000);
     last = now;
-    acc += delta;
 
     if (input.take('KeyP') && game.state === 'playing') game.paused = !game.paused;
-    if (game.state === 'title' && (input.take('Space') || input.take('Enter'))) {
+    let flashPressed = false;
+    const resultsReady = game.state === 'results' && game.time - game.finishTime > 0.8;
+    if (game.state === 'title' && (input.take('Space') || input.take('Enter') || input.takeClick())) {
       game.sound.unlock();
       game.start();
-    } else if ((game.state === 'won' || game.state === 'caught') && (input.take('KeyR') || input.take('Space'))) {
+    } else if (resultsReady && (input.take('KeyR') || input.take('Space') || input.takeClick())) {
       runSeed += 1;
       game.newRun(runSeed);
       game.sound.unlock();
       game.start();
+    } else if (game.state === 'playing' && (input.take('Space') || input.takeClick())) {
+      flashPressed = true;
     }
-    if (input.buzz) game.sound.unlock();
+    // During the scripted opening, ANY key or click is the dodge.
+    if (game.state === 'playing' && game.tutorial !== 'done' && (input.take('Enter') || input.take('KeyR'))) {
+      flashPressed = true;
+    }
 
-    while (acc >= STEP) {
+    // Real-time effect clocks: freeze holds the world (but not the
+    // particles and texts — those step inside stepFx via step()).
+    if (game.freezeT > 0) {
+      game.freezeT -= delta;
+      game.stepFx(delta);
+      game.whiteFlashT = Math.max(0, game.whiteFlashT - delta);
+      game.redFlashT = Math.max(0, game.redFlashT - delta);
+      game.draw(delta);
+      requestAnimationFrame(frame);
+      return;
+    }
+    let scale = game.tsHint;
+    if (game.slowmoT > 0) {
+      game.slowmoT -= delta;
+      scale = Math.min(scale, game.slowmoVal);
+    }
+    game.whiteFlashT = Math.max(0, game.whiteFlashT - delta);
+    game.redFlashT = Math.max(0, game.redFlashT - delta);
+
+    acc += delta * scale;
+    let guard = 0;
+    while (acc >= STEP && guard++ < 10) {
       if (!game.paused) {
         game.step(STEP, {
-          steer: input.mouse.inside ? { tx: input.mouse.x, ty: input.mouse.y } : null,
-          buzz: input.buzz,
+          steer: input.mouse.inside ? { x: input.mouse.x, y: input.mouse.y } : null,
+          flashPressed,
         });
+        flashPressed = false;
       }
       acc -= STEP;
     }
