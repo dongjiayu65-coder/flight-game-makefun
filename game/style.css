@@ -1,0 +1,43 @@
+/* style.css — the page around the canvas: a dark warm backdrop so the
+   lit dinner table floats in the middle, the canvas scaled to fit
+   while keeping its 1280×800 shape, and one line of controls below. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #241708;
+  color: #f5eeda;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+}
+
+canvas#game {
+  width: min(1280px, 97vw);
+  height: auto;
+  aspect-ratio: 1280 / 800;
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  background: #f3e3c2;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.hint {
+  margin: 0;
+  font-size: 15px;
+  opacity: 0.85;
+  text-align: center;
+}
+
+.hint strong { color: #ffe9a3; }

@@ -1,110 +1,71 @@
-// config.js — every tunable number of Ridgeline Post in one place:
-// the physics constants, the three missions of the campaign, and the
-// colour palettes each mission flies under. Nothing here touches the
-// DOM or the canvas; the other modules read from these tables only.
+// config.js — every tunable number of "First-Person Fly at Dinner"
+// (《我是那只苍蝇》) in one place: the room, the table, the foods of
+// the objective chain, the humans and their patience, and how getting
+// fat changes the flying. Rendering and rules read from here only.
 
-export const WORLD = {
-  // The valley runs along +Z. Terrain is generated for x in
-  // [-halfWidth, +halfWidth]; the flyable course is the valley floor.
-  halfWidth: 900,
-  // Heightfield sample spacing in metres, along and across.
-  stepAcross: 60,
-  stepAlong: 120,
-  // How far ahead of the camera the renderer draws terrain strips.
-  viewDistance: 4200,
-  // Sea level of the world: the valley floor sits a little above it.
-  baseHeight: 320,
+export const VIEW = {
+  // Logical canvas size; the page scales it to fit the window.
+  width: 1280,
+  height: 800,
 };
 
-export const PLANE = {
-  // Speeds are metres per second, shown to the pilot as knots.
-  stallSpeed: 24,
-  cruiseSpeed: 48,
-  maxSpeed: 82,
-  // Vertical speed limits the airframe tolerates on touchdown.
-  landingMaxSink: 3.2,
-  landingMaxSpeed: 44,
-  // Fuel is counted in abstract units; a full tank is 100.
-  fuelCapacity: 100,
-  // Fuel burn per second at full throttle; idle still sips a little.
-  fuelBurnFull: 0.55,
-  fuelBurnIdle: 0.08,
+export const ROOM = {
+  // The dining table: a big rounded rectangle in the middle of the room.
+  table: { x: 240, y: 172, w: 800, h: 478, r: 60 },
+  // The window is a glowing rectangle on the north wall; the escape.
+  // It sits below the HUD bar and above the table rim, fully visible.
+  window: { x: 565, y: 76, w: 150, h: 50 },
 };
 
-export const MISSIONS = [
-  {
-    id: 'first-delivery',
-    name: 'Mission 1 — First Delivery',
-    short: 'Calm morning. Learn the valley, thread six rings, land at Lark Strip.',
-    seed: 1123,
-    length: 15000, // metres from start line to the runway threshold
-    rings: 6,
-    fuel: 78,
-    startSpeed: 46,
-    startAltitude: 210, // metres above the valley floor at the start line
-    wind: { x: 0.6, gust: 0.0 },
-    palette: 'morning',
-    parTime: 300,
-  },
-  {
-    id: 'river-run',
-    name: 'Mission 2 — River Run',
-    short: 'Follow the river low and quick. Eight rings, a tighter tank, a crosswind.',
-    seed: 7421,
-    length: 19500,
-    rings: 8,
-    fuel: 66,
-    startSpeed: 52,
-    startAltitude: 170,
-    wind: { x: 2.4, gust: 0.7 },
-    palette: 'noon',
-    parTime: 330,
-  },
-  {
-    id: 'storm-pass',
-    name: 'Mission 3 — Storm Pass',
-    short: 'Dusk storm over the high pass. Gusts shove the wings; the strip is short on fuel and long on weather.',
-    seed: 9917,
-    length: 22500,
-    rings: 8,
-    fuel: 58,
-    startSpeed: 54,
-    startAltitude: 240,
-    wind: { x: -3.4, gust: 2.6 },
-    palette: 'storm',
-    parTime: 360,
-  },
+export const FLY = {
+  radius: 13, // drawn body radius at weight 0; grows with weight
+  // Gliding: velocity decays by this fraction each second.
+  glideDrag: 1.5,
+  // A buzz dash: impulse along the heading, before weight penalties.
+  dashImpulse: 340,
+  // Seconds between dashes while the buzz key is held.
+  dashCooldown: 0.16,
+  // Random deflection of a dash, degrees, at weight 0.
+  dashDeflectDeg: 30,
+  // Extra deflection per weight level, degrees.
+  deflectPerWeight: 9,
+  // Dash impulse multiplier lost per weight level.
+  dashWeakPerWeight: 0.13,
+  // How fast the heading turns toward the mouse, radians per second.
+  steerRate: 7.5,
+  // top speed clamp, px/s
+  maxSpeed: 620,
+};
+
+export const FOODS = [
+  // The objective chain, in order. grams feed the results screen;
+  // dwell is how long the fly must stay on the dish to finish it.
+  { id: 'greens', name: '蒜蓉青菜', sub: 'Stir-fried greens', grams: 12, dwell: 0.9, color: '#58a34c', dark: '#3c7434' },
+  { id: 'soup', name: '番茄蛋汤', sub: 'Tomato egg soup', grams: 18, dwell: 1.1, color: '#e2703a', dark: '#b34f24' },
+  { id: 'cake', name: '生日蛋糕', sub: 'Birthday cake', grams: 25, dwell: 1.3, color: '#f2b8c6', dark: '#cf7f97' },
 ];
 
-// Sky, fog and terrain colours per palette. Terrain itself is shaded
-// from these bases by height and slope inside render.js.
-export const PALETTES = {
-  morning: {
-    skyTop: '#2e5f8a', skyHorizon: '#cfe4ee', fog: '#c3d9e6',
-    sun: '#fff3cf',
-    grass: '#5d8a4a', dry: '#9aa055', rock: '#8d8578', snow: '#f4f7f7',
-    water: '#3f7d99', sand: '#c9bd93',
-  },
-  noon: {
-    skyTop: '#2b6cb8', skyHorizon: '#d8ecf7', fog: '#cfe2ee',
-    sun: '#ffffff',
-    grass: '#4f9142', dry: '#a3a35c', rock: '#8a8175', snow: '#f7fafa',
-    water: '#2f7fa8', sand: '#d3c69c',
-  },
-  storm: {
-    skyTop: '#3a4356', skyHorizon: '#9aa5ad', fog: '#8d979e',
-    sun: '#d8d3c3',
-    grass: '#4c6b41', dry: '#7d7f52', rock: '#6f6a61', snow: '#e8ecec',
-    water: '#33586b', sand: '#a89a7c',
-  },
+export const HUMANS = {
+  count: 4,
+  // Vision cone: half-angle and reach in px.
+  coneHalfAngle: 0.42,
+  coneRange: 330,
+  // Cone sweep: each gaze swings around its home direction.
+  sweepArc: 0.85,
+  sweepSpeed: 0.55,
+  // Attention: fills while any cone holds the fly, drains when unseen.
+  attentionGain: 0.34, // per second while watched
+  attentionDecay: 0.5, // per second while hidden
+  // At full attention the palm comes: warning shadow, then the slam.
+  palmWarnTime: 0.65, // seconds of growing shadow before impact
+  palmRadius: 74, // caught if the fly is inside this at impact
+  palmRecover: 1.1, // seconds the hand stays down / lifts away
+  // After the 90-second mark the table gets warier: gains scale up.
+  lateGameAt: 90,
+  lateGameGainScale: 1.5,
 };
 
-// Ring course layout knobs, shared by every mission.
-export const COURSE = {
-  // First ring this far past the start line, then roughly even spacing.
-  firstRing: 2600,
-  // Rings wander this far sideways from the valley centre line.
-  ringWander: 260,
-  // Ring radius in metres; flying through the disc scores.
-  ringRadius: 26,
+export const GAME = {
+  // Soft target length of one run, seconds; shown on the HUD clock.
+  parSeconds: 90,
 };
