@@ -325,7 +325,8 @@ class Game {
     this.sound.update(dt, { playing: true, flySpeed: this.fly.speed, landed: !!this.fly.landedOn, warnMs: this.warnRemainMs(), bet: this.bet });
 
     if (this.resultsAt > 0 && this.clock >= this.resultsAt) return this.finish(this.endReason);
-    if (this.hp <= 0) return this.finish('GAME OVER');
+    // v6.1: no instant finish at hp 0 — hitFly already schedules the
+    // results 1s out (resultsAt), so the final splat is actually seen.
     if (this.tutorial === 'done' && this.elapsed >= GAME.duration) return this.finish("TIME'S UP!");
   }
 

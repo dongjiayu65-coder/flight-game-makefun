@@ -70,7 +70,10 @@ export class Table {
     // placeholders and are gone. (Fewer rng draws: seeded layouts
     // shift once relative to v5.)
     this.dressing = [];
-    const kinds = ['cup', 'plate', 'fork', 'knife', 'cup', 'fork', 'plate', 'knife'];
+    // v6.1: no 'plate' — the atlas has no intact side-plate frame
+    // (only plate-cracked), so plates still drew as blank code
+    // circles. Cups, forks and knives are all painted.
+    const kinds = ['cup', 'fork', 'knife', 'cup', 'fork', 'knife', 'cup', 'fork'];
     for (let i = 0; i < kinds.length; i++) {
       this.dressing.push({
         kind: kinds[i],

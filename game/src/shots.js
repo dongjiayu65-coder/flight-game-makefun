@@ -79,7 +79,15 @@ export function applyPose(game, name) {
     game.score = 21300;
     game.chaosTotal = 3900;
     game.hud.announce('ALL HANDS ON DECK!', 2);
-    for (const h of table.humans) h.expression = 'angry';
+    // v6.1: match the live finale — three companion hands reaching in
+    // from their seats, and every face terrified (80s+ rule).
+    for (const h of [mom, grandpa, timmy]) {
+      const extra = director.startAttack(h, cake.x, cake.y, 84, { target: zone, finale: true });
+      extra.decor = true;
+      extra.dur = atk.dur;
+      extra.t = atk.t;
+    }
+    for (const h of table.humans) h.expression = 'scared';
     return;
   }
 
@@ -195,13 +203,20 @@ export function applyPose(game, name) {
   }
 
   if (name === 'opening') {
-    // v5: the untouched table at the top of a run — all four
-    // seats in frame, the RUINED meter parked top-left.
-    play(2);
-    fly.x = 640;
-    fly.y = 420;
-    fly.vx = 0;
-    fly.vy = 0;
+    // v6.1: the real opening beat — the fly on Dad's nose, his palm
+    // ring closing, the SPACE keycap up (what the live run shows).
+    game.state = 'playing';
+    game.tutorial = 'script';
+    game.tutPhase = 'nose';
+    game.hudSlideT = 0;
+    landOn({ kind: 'head', ref: dad, x: dad.x, y: dad.y - 6, r: dad.headR });
+    const atk = director.startAttack(dad, dad.x, dad.y - 6, 0, { noWeapon: true });
+    atk.tutorial = 'nose';
+    atk.dur = 1.4;
+    atk.t = 1.05;
+    game.tutAttack = atk;
+    game.showKeycap = true;
+    dad.expression = 'angry';
     return;
   }
   if (name === 'mood') {

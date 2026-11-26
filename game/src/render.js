@@ -27,7 +27,7 @@ const HEAD_DRAW = 1.15;
 // Measured by eye off the S1 atlas frames — check with the debug
 // overlay and nudge here, nowhere else.
 const DECAL = {
-  Dad: { eyeY: -0.06, eyeSpan: 1.05, cheekX: -0.46, cheekY: 0.34, soupY: -0.72, soupW: 1.35 },
+  Dad: { eyeY: -0.06, eyeSpan: 1.05, cheekX: -0.58, cheekY: 0.46, soupY: -0.72, soupW: 1.35 }, // v6.1: print off the X-eye
   Mom: { eyeY: -0.02, eyeSpan: 1.0, cheekX: -0.44, cheekY: 0.36, soupY: -1.02, soupW: 1.2 },
   Grandpa: { eyeY: -0.1, eyeSpan: 1.05, cheekX: -0.48, cheekY: 0.3, soupY: -0.78, soupW: 1.3 },
   Timmy: { eyeY: 0.02, eyeSpan: 1.0, cheekX: -0.44, cheekY: 0.38, soupY: -0.68, soupW: 1.25 },
