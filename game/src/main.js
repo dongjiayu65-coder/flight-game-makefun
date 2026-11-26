@@ -1642,7 +1642,9 @@ class Game {
   // The default face caps at SUSPICIOUS (25%+ ruined) — angry is kept
   // for faces that mean something (provoked, aiming) — except that
   // from 55s the whole room defaults to angry with steam, and from
-  // 80s (the finale) everyone is terrified. Anybody wearing a decal
+  // 80s (the finale) everyone is terrified. The photo beat's smile
+  // ranks under that 55s default (but still over a merely provoked
+  // face). Anybody wearing a decal
   // (soup, handprint, food hat) never drops below suspicious.
   expressionLogic(dt = 0) {
     const destruction = this.destruction01;
@@ -1664,17 +1666,19 @@ class Game {
         expr = h.shockExpr;
       } else if (finale) {
         expr = 'scared'; // the finale: four hands, four terrified faces
-      } else if (this.photoT > 0) {
-        expr = 'happy'; // say cheese (soup and all)
       } else if (h.aiming) {
         expr = 'angry';
       } else if (h.gloatT > 0) {
         expr = 'happy';
-      } else if (h.angryT > 0) {
-        expr = 'angry';
       } else if (this.tutorial === 'done' && e >= MOOD.steamFrom) {
+        // The late room default sits above the photo beat: once the
+        // party is steaming, a camera flash no longer buys a grin.
         expr = 'angry';
         h.steam = true;
+      } else if (this.photoT > 0) {
+        expr = 'happy'; // say cheese (soup and all)
+      } else if (h.angryT > 0) {
+        expr = 'angry';
       } else if (destruction >= MOOD.suspiciousAt) {
         expr = 'suspicious';
       } else {
