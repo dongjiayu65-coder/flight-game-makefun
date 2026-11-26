@@ -35,6 +35,10 @@ export class Fly {
     // Landing (spec 3.3): the prop currently landed on, if any.
     this.landedOn = null;
     this.trail = [];
+    // P0-4: the family's heads (set by the game). The stage is the
+    // table + 30px apron UNION every face circle, so the fly can land
+    // on Mom, Grandpa and Timmy, not just Dad.
+    this.heads = [];
   }
 
   get radius() {
@@ -151,10 +155,47 @@ export class Fly {
       this.y += this.vy * dt;
     }
 
-    // The stage: the table, plus a 30px apron around it.
+    // The stage (P0-4): the table plus a 30px apron, united with a
+    // circle around every face (head radius + 10). Inside either the
+    // fly is free; outside both it snaps to the nearest edge.
     const t = ROOM.table;
-    this.x = clamp(this.x, t.x - 30, t.x + t.w + 30);
-    this.y = clamp(this.y, t.y - 30, t.y + t.h + 30);
+    const rx = clamp(this.x, t.x - 30, t.x + t.w + 30);
+    const ry = clamp(this.y, t.y - 30, t.y + t.h + 30);
+    if (rx !== this.x || ry !== this.y) {
+      let inHead = false;
+      let bestX = rx;
+      let bestY = ry;
+      let bestD = Math.hypot(this.x - rx, this.y - ry);
+      for (const h of this.heads) {
+        const R = (h.headR ?? 48) + 10;
+        const dx = this.x - h.x;
+        const dy = this.y - h.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= R) {
+          inHead = true;
+          break;
+        }
+        const over = dist - R;
+        if (over < bestD) {
+          bestD = over;
+          bestX = h.x + (dx / dist) * R;
+          bestY = h.y + (dy / dist) * R;
+        }
+      }
+      if (!inHead) {
+        // Kill the velocity component pushing through the wall.
+        const nx = this.x - bestX;
+        const ny = this.y - bestY;
+        const nl = Math.hypot(nx, ny) || 1;
+        const vn = (this.vx * nx + this.vy * ny) / nl;
+        if (vn > 0) {
+          this.vx -= (nx / nl) * vn;
+          this.vy -= (ny / nl) * vn;
+        }
+        this.x = bestX;
+        this.y = bestY;
+      }
+    }
 
     // The sprite turns toward its velocity at 14 rad/s (spec 3.1).
     if (this.speed > 40) {

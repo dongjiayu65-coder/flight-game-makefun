@@ -99,7 +99,11 @@ export class Director {
   startAttack(owner, x, y, elapsed, opts = {}) {
     const timing = timingAt(elapsed);
     let kind = 'palm';
-    if (opts.kind) kind = opts.kind;
+    // P0-3: the finale is always a palm, whoever's hand it is — Timmy's
+    // hat charge (0.55s) and Mom's spray (never explodes the cake)
+    // used to hijack the climax.
+    if (opts.finale) kind = 'palm';
+    else if (opts.kind) kind = opts.kind;
     else if (elapsed >= TAUNT.sprayAt && owner.name === 'Mom' && !opts.noWeapon) kind = 'spray';
     else if (elapsed >= TAUNT.pokeAt && owner.name === 'Timmy' && !opts.noWeapon) kind = 'poke';
     const atk = {
@@ -124,12 +128,12 @@ export class Director {
       justLocked: false,
     };
     if (kind === 'palm') {
-      if (owner.name === 'Grandpa' && elapsed >= TAUNT.swatterAt) {
+      if (owner.name === 'Grandpa' && elapsed >= TAUNT.swatterAt && !opts.finale) {
         atk.radius = TAUNT.swatterRadius;
         atk.dur *= TAUNT.swatterWarnScale;
         atk.swatter = true;
       }
-      if (owner.name === 'Dad' && elapsed >= TAUNT.doubleAt && !opts.noWeapon) {
+      if (owner.name === 'Dad' && elapsed >= TAUNT.doubleAt && !opts.noWeapon && !opts.finale) {
         atk.secondPending = true; // the newspaper comes down twice
       }
       if (opts.warnScale) atk.dur *= opts.warnScale;
@@ -181,7 +185,9 @@ export class Director {
   // the point locks; Timmy's locked point jumps (he's fast, not
   // accurate), which is his whole personality.
   track(atk, dt, fly) {
-    if (!fly || atk.finale) return;
+    // P0-2: scripted tutorial slaps never chase the fly — the opening
+    // must land on Dad's own face, the soup beat on the soup.
+    if (!fly || atk.finale || atk.tutorial) return;
     const remain = atk.dur - atk.t;
     if (atk.locked) return;
     if (remain <= V3.lockMs / 1000) {

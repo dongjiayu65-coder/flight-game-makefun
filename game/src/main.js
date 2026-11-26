@@ -71,11 +71,13 @@ class Game {
     this.director = new Director(this.table, makeRng(seed * 29 + 3));
     const dad = this.table.humans[3];
     this.fly = new Fly(makeRng(seed * 7 + 1), dad.x, dad.y - 6);
+    this.fly.heads = this.table.humans; // P0-4: faces are part of the flyable stage
     this.clock = 0; // real run clock (tutorial included)
     this.elapsed = 0; // the 90s party clock (starts after the tutorial)
     this.tutorial = META.runs === 0 ? 'script' : 'quick';
     this.tutPhase = 'nose'; // nose -> soup -> done (script) | quick
     this.tutAttack = null;
+    this.tutDodged = false; // P0-2: the fly stays pinned on Dad's nose until this
     this.score = 0;
     this.chaosTotal = 0;
     this.combo = 0;
@@ -90,6 +92,7 @@ class Game {
     this.tauntClock = 0;
     this.idleClock = 0;
     this.pendingFlash = false;
+    this.queuedFlash = false; // P0-1: latched dodge press, cleared by step()
     this.prevFlashReady = true;
     this.eventQueue = []; // {at, fn} derivations, 0.3s per chain layer
     this.eventCd = new Map(); // object ref -> clock when its event re-arms
@@ -244,8 +247,24 @@ class Game {
 
     if (input.flashPressed) this.noteDodgePress();
     this.handleFlash(input);
+    // P0-2: during the opening beat on Dad's nose the mouse does not
+    // steer — the fly is pinned to the nose until the first dodge
+    // fires, so the slap is guaranteed to come down on Dad's face.
+    let steer = input.steer;
+    if (this.tutorial !== 'done' && this.tutPhase === 'nose' && !this.tutDodged) {
+      if (this.fly.flashing) {
+        this.tutDodged = true;
+      } else {
+        const dad = this.table.humans[3];
+        steer = { x: dad.x, y: dad.y - 6 };
+        this.fly.x = dad.x;
+        this.fly.y = dad.y - 6;
+        this.fly.vx = 0;
+        this.fly.vy = 0;
+      }
+    }
     const inMist = this.director.mistHolds(this.fly.x, this.fly.y);
-    this.fly.update(dt, input.steer, null, inMist);
+    this.fly.update(dt, steer, null, inMist);
     this.sound.buzz(true);
 
     const impacts = this.director.update(dt, this.fly);
@@ -425,7 +444,7 @@ class Game {
   // measurement); the exit frame records whether it left by flash.
   trackEscapes() {
     for (const atk of this.director.attacks) {
-      if (atk.state !== 'warning') continue;
+      if (atk.state !== 'warning' || atk.decor) continue;
       const inside = this.flyInShape(atk, this.fly.x, this.fly.y);
       if (inside) {
         atk.remainMs = (atk.dur - atk.t) * 1000;
@@ -453,6 +472,8 @@ class Game {
   // --- impact resolution -------------------------------------------------
 
   resolveImpact(atk) {
+    // P0-3: the finale's three companion palms are pure spectacle.
+    if (atk.decor) return;
     // A spilled drink makes the hand slip (E7): the impact point
     // skids before anything is judged.
     if (this.puddle && atk.kind === 'palm' && !atk.finale) {
@@ -1103,18 +1124,34 @@ class Game {
       this.tauntClock += dt;
       const timing = timingAt(this.elapsed);
       const finale = this.finaleArmed && fly.landedOn.kind === 'cake' && !this.finaleTriggered;
-      if (this.tauntClock >= timing.tauntDelay && this.director.freeSlot(this.elapsed) && this.doorbellT <= 0) {
+      // P0-3: the finale ignores the slot cap, the doorbell and every
+      // personal cooldown — it must fire the moment the fly sits down.
+      const slotOk = finale || (this.director.freeSlot(this.elapsed) && this.doorbellT <= 0);
+      if (this.tauntClock >= timing.tauntDelay && slotOk) {
         const target = fly.landedOn;
-        const owner = target.kind === 'head'
-          ? (target.ref.cooldownT <= 0 && target.ref.blockedT <= 0 ? target.ref : this.director.nearestHuman(target.x, target.y, true))
-          : this.director.nearestHuman(target.x, target.y, true);
+        const owner = finale
+          ? this.director.nearestHuman(target.x, target.y, false)
+          : target.kind === 'head'
+            ? (target.ref.cooldownT <= 0 && target.ref.blockedT <= 0 ? target.ref : this.director.nearestHuman(target.x, target.y, true))
+            : this.director.nearestHuman(target.x, target.y, true);
         if (owner) {
           this.tauntClock = 0;
           const atk = this.director.startAttack(owner, target.x, target.y, this.elapsed, { target, finale });
-          if (this.table.lampSwingT > 0) atk.dur += 0.3; // E4's wobble buys everyone time
+          if (this.table.lampSwingT > 0 && !finale) atk.dur += 0.3; // E4's wobble buys everyone time
           if (finale) {
             this.finaleTriggered = true;
             this.hud.announce(this.copy.finale.allHands.draw(), 1.2);
+            // ALL HANDS ON DECK: the other three family members bring
+            // their palms down on the cake in sync. They are drawn like
+            // any palm but resolve nothing — the owner's attack alone
+            // judges the dodge and blows up the cake.
+            for (const h of this.table.humans) {
+              if (h === owner) continue;
+              const extra = this.director.startAttack(h, target.x, target.y, this.elapsed, { target, finale: true });
+              extra.decor = true;
+              extra.dur = atk.dur;
+              extra.t = atk.t;
+            }
           }
           this.sound.warn();
           if (atk.kind === 'spray') this.sound.sprayWarn();
@@ -1311,6 +1348,7 @@ class Game {
       if (this.tutPhase === 'nose' && this.tutAttack && this.tutAttack.state === 'done') {
         this.tutorial = 'done';
         this.tutPhase = 'done';
+        this.tutDodged = true;
       }
       return;
     }
@@ -1329,6 +1367,7 @@ class Game {
         // hitFly knows — and Dad still wears the handprint story.)
         this.tutPhase = 'soup';
         this.tutAttack = null;
+        this.tutDodged = true;
         this.ghostTarget = this.table.foods[1];
         for (const h of this.table.humans) {
           h.expression = 'scared';
@@ -1381,17 +1420,21 @@ class Game {
   get tsHint() {
     if (this.tutorial === 'script' && this.tutPhase === 'nose' && this.tutAttack && this.tutAttack.state === 'warning') {
       const remainMs = (this.tutAttack.dur - this.tutAttack.t) * 1000;
-      this.showKeycap = remainMs < 500 && !this.tutAttack.exited;
+      // P0-2: only freeze / show the keycap while the fly is really
+      // under the hand — never over an empty threat.
+      const inside = this.flyInShape(this.tutAttack, this.fly.x, this.fly.y);
+      this.showKeycap = inside && remainMs < 500 && !this.tutAttack.exited;
       // Near-freeze only in the last stretch, and only until the
       // dodge happens — then time snaps back (spec 3.5).
-      if (remainMs < 200 && !this.tutAttack.exited && !this.fly.flashing) {
+      if (inside && remainMs < 200 && !this.tutAttack.exited && !this.fly.flashing) {
         return Math.max(0.05, 0.05 + ((remainMs - 60) / 140) * 0.45);
       }
     }
     if (this.tutorial === 'script' && this.tutPhase === 'soup' && this.tutAttack && this.tutAttack.state === 'warning') {
       const remainMs = (this.tutAttack.dur - this.tutAttack.t) * 1000;
-      this.showKeycap = remainMs < 260 && remainMs > 120 && !this.tutAttack.exited;
-      if (remainMs <= 200 && !this.tutAttack.exited && !this.fly.flashing) return 0.4;
+      const inside = this.flyInShape(this.tutAttack, this.fly.x, this.fly.y);
+      this.showKeycap = inside && remainMs < 260 && remainMs > 120 && !this.tutAttack.exited;
+      if (inside && remainMs <= 200 && !this.tutAttack.exited && !this.fly.flashing) return 0.4;
     }
     // The finale's last 400ms crawl (spec 2.9).
     const finaleAtk = this.director.attacks.find((a) => a.finale && a.state === 'warning');
@@ -1546,7 +1589,19 @@ if (shotName) {
   // Same for the sprite atlas and the painted background.
   onSpritesReady(() => game.draw(0));
 } else {
-  game.state = 'title';
+  // P0-2: zero menu — the run starts the instant the page opens, with
+  // the fly already on Dad's nose. Browsers only allow audio after a
+  // user gesture, so the first key/click/touch unlocks the sound.
+  game.start();
+  const unlockAudio = () => {
+    game.sound.unlock();
+    window.removeEventListener('keydown', unlockAudio, true);
+    window.removeEventListener('pointerdown', unlockAudio, true);
+    window.removeEventListener('touchstart', unlockAudio, true);
+  };
+  window.addEventListener('keydown', unlockAudio, true);
+  window.addEventListener('pointerdown', unlockAudio, true);
+  window.addEventListener('touchstart', unlockAudio, true);
   // P0-4: losing the tab mid-run pauses the party — nobody should
   // come back from a review tab to a fly already flat.
   const loseFocus = () => {
@@ -1569,7 +1624,10 @@ if (shotName) {
       return;
     }
     if (input.take('KeyP') && game.state === 'playing') game.paused = !game.paused;
-    let flashPressed = false;
+    // P0-1: a dodge press is latched on the game until a simulation
+    // step actually consumes it. In slow motion (tutorial freeze
+    // 0.05, finale 0.25, PERFECT 0.3) most frames run zero steps, and
+    // a frame-local flag used to throw the press away.
     const resultsReady = game.state === 'results' && game.time - game.finishTime > 0.8;
     if (game.state === 'title' && (input.take('Space') || input.take('Enter') || input.takeClick())) {
       game.sound.unlock();
@@ -1580,16 +1638,16 @@ if (shotName) {
       game.sound.unlock();
       game.start();
     } else if (game.state === 'playing') {
-      if (input.take('Space')) flashPressed = true;
+      if (input.take('Space')) game.queuedFlash = true;
       if (input.takeClick()) {
         // Landed clicks raise the bet (P1-4); airborne clicks dodge.
         if (game.tutorial === 'done' && game.fly.landedOn) game.placeBet();
-        else flashPressed = true;
+        else game.queuedFlash = true;
       }
     }
     // During the scripted opening, ANY key or click is the dodge.
     if (game.state === 'playing' && game.tutorial !== 'done' && (input.take('Enter') || input.take('KeyR'))) {
-      flashPressed = true;
+      game.queuedFlash = true;
     }
 
     // Real-time effect clocks: freeze holds the world (but not the
@@ -1617,9 +1675,9 @@ if (shotName) {
       if (!game.paused) {
         game.step(STEP, {
           steer: input.mouse.inside ? { x: input.mouse.x, y: input.mouse.y } : null,
-          flashPressed,
+          flashPressed: game.queuedFlash,
         });
-        flashPressed = false;
+        game.queuedFlash = false; // consumed by a real step, never by a frame
       }
       acc -= STEP;
     }
