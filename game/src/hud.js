@@ -7,6 +7,7 @@
 
 import { PALETTE, VIEW, GAME } from './config.js';
 import { GALLERY } from './copy.js';
+import { spritesReady, drawSprite } from './sprites.js';
 
 const TAU = Math.PI * 2;
 const OUTLINE = PALETTE.ink;
@@ -464,6 +465,11 @@ export class Hud {
 
   creamSplat(x, y, r) {
     const ctx = this.ctx;
+    // The painted cream decals (S5) first; code blobs as fallback.
+    if (spritesReady()) {
+      const name = r >= 28 ? 'cream-big' : r >= 16 ? 'cream-mid' : 'cream-small';
+      if (drawSprite(ctx, name, x, y, { w: r * 2.5 })) return;
+    }
     ctx.fillStyle = 'rgba(255,240,244,0.92)';
     for (let i = 0; i < 5; i++) {
       const a = i * 1.7 + x;
@@ -491,57 +497,67 @@ export class Hud {
       const x = a[0] * size;
       const y = a[1] * size;
       if (h.soupFace) {
-        ctx.fillStyle = 'rgba(232,116,59,0.92)';
-        ctx.beginPath();
-        ctx.arc(x, y - size * 0.045, size * 0.052, Math.PI, TAU);
-        ctx.fill();
-        for (let d = 0; d < 3; d++) {
+        if (!(spritesReady() && drawSprite(ctx, 'soupface', x, y - size * 0.01, { w: size * 0.17 }))) {
+          ctx.fillStyle = 'rgba(232,116,59,0.92)';
           ctx.beginPath();
-          ctx.ellipse(x - size * 0.03 + d * size * 0.03, y - size * 0.03, 3.4, 9 + d * 3, 0, 0, TAU);
+          ctx.arc(x, y - size * 0.045, size * 0.052, Math.PI, TAU);
           ctx.fill();
+          for (let d = 0; d < 3; d++) {
+            ctx.beginPath();
+            ctx.ellipse(x - size * 0.03 + d * size * 0.03, y - size * 0.03, 3.4, 9 + d * 3, 0, 0, TAU);
+            ctx.fill();
+          }
         }
       }
       if (h.palmPrint) {
-        ctx.save();
-        ctx.translate(x + size * 0.035, y + size * 0.02);
-        ctx.rotate(0.5);
-        ctx.fillStyle = 'rgba(255,64,54,0.8)';
-        ctx.beginPath();
-        ctx.ellipse(0, 3, 8.5, 10, 0, 0, TAU);
-        ctx.fill();
-        for (let f = 0; f < 4; f++) {
+        if (!(spritesReady() && drawSprite(ctx, 'palmprint', x + size * 0.035, y + size * 0.02, { w: size * 0.085, rot: 0.5 }))) {
+          ctx.save();
+          ctx.translate(x + size * 0.035, y + size * 0.02);
+          ctx.rotate(0.5);
+          ctx.fillStyle = 'rgba(255,64,54,0.8)';
           ctx.beginPath();
-          ctx.ellipse(-6 + f * 4.2, -7, 2.2, 5, (f - 1.5) * 0.16, 0, TAU);
+          ctx.ellipse(0, 3, 8.5, 10, 0, 0, TAU);
           ctx.fill();
+          for (let f = 0; f < 4; f++) {
+            ctx.beginPath();
+            ctx.ellipse(-6 + f * 4.2, -7, 2.2, 5, (f - 1.5) * 0.16, 0, TAU);
+            ctx.fill();
+          }
+          ctx.restore();
         }
-        ctx.restore();
       }
-      if (h.hatKind === 'greens') {
-        ctx.fillStyle = '#4CAF50';
-        for (let i = 0; i < 4; i++) {
-          ctx.beginPath();
-          ctx.ellipse(x + Math.cos(i * 1.9) * 8, y - size * 0.075 + Math.sin(i * 1.9) * 3, 9, 5.5, i, 0, TAU);
-          ctx.fill();
+      if (h.hatKind === 'greens' || h.hatKind === 'chicken') {
+        if (!(spritesReady() && drawSprite(ctx, h.hatKind, x, y - size * 0.075, { w: size * 0.11, rot: 0.3 }))) {
+          if (h.hatKind === 'greens') {
+            ctx.fillStyle = '#4CAF50';
+            for (let i = 0; i < 4; i++) {
+              ctx.beginPath();
+              ctx.ellipse(x + Math.cos(i * 1.9) * 8, y - size * 0.075 + Math.sin(i * 1.9) * 3, 9, 5.5, i, 0, TAU);
+              ctx.fill();
+            }
+          } else {
+            ctx.fillStyle = '#D98E32';
+            ctx.beginPath();
+            ctx.ellipse(x, y - size * 0.075, 13, 8, 0.3, 0, TAU);
+            ctx.fill();
+          }
         }
-      } else if (h.hatKind === 'chicken') {
-        ctx.fillStyle = '#D98E32';
-        ctx.beginPath();
-        ctx.ellipse(x, y - size * 0.075, 13, 8, 0.3, 0, TAU);
-        ctx.fill();
       }
     }
     if (game.events.dentures) {
       // Grandpa's teeth, mid-flight, top-right — just like F3.
-      ctx.save();
-      ctx.translate(size * 0.74, size * 0.15);
-      ctx.rotate(-0.25);
-      ctx.fillStyle = '#FF9FB2';
-      ctx.beginPath();
-      ctx.arc(0, 0, 13, 0.1 * Math.PI, 0.9 * Math.PI);
-      ctx.fill();
-      ctx.fillStyle = '#FFFFFF';
-      for (let i = -2; i <= 2; i++) ctx.fillRect(i * 4.6 - 2, 4, 4, 7);
-      ctx.restore();
+      if (!(spritesReady() && drawSprite(ctx, 'dentures', size * 0.74, size * 0.15, { w: size * 0.1, rot: -0.25 }))) {
+        ctx.save();
+        ctx.translate(size * 0.74, size * 0.15);
+        ctx.rotate(-0.25);
+        ctx.fillStyle = '#FF9FB2';
+        ctx.beginPath();
+        ctx.arc(0, 0, 13, 0.1 * Math.PI, 0.9 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        for (let i = -2; i <= 2; i++) ctx.fillRect(i * 4.6 - 2, 4, 4, 7);
+        ctx.restore();
+      }
     }
     if (game.table.humans[3].glassesOff) {
       ctx.save();

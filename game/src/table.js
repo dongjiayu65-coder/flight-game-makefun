@@ -84,14 +84,15 @@ export class Table {
       (d) => !this.foods.some((f) => Math.hypot(d.x - f.x, d.y - f.y) < f.r + d.r + 10),
     );
 
-    // The family (spec 1.4). Big sticker heads at the table edges.
+    // The family (spec 1.4). Big sticker heads at the table edges,
+    // seated on the painted chairs (ROOM.seats, measured off F1b).
     const cx = t.x + t.w / 2;
     const cy = t.y + t.h / 2;
     const seats = [
-      { x: cx - 200, y: t.y - 66, name: 'Mom', look: { hair: 'bun', hairColor: '#4a2c1a', skin: '#FFCFA8', clothes: '#B565D8', earrings: true, blush: true, glasses: false, moustache: false, hat: false, dentures: false } },
-      { x: t.x - 66, y: cy + 60, name: 'Grandpa', look: { hair: 'bald', hairColor: '#e8e4da', skin: '#FFCFA8', clothes: '#8A9A5B', earrings: false, blush: false, glasses: false, moustache: false, hat: false, dentures: true } },
-      { x: t.x + t.w + 66, y: cy - 40, name: 'Timmy', look: { hair: 'kid', hairColor: '#3a2a1c', skin: '#FFD9B0', clothes: '#FFC94A', earrings: false, blush: true, glasses: false, moustache: false, hat: true, dentures: false, gapTooth: true } },
-      { x: cx + 190, y: t.y + t.h + 66, name: 'Dad', look: { hair: 'short', hairColor: '#26221f', skin: '#FFCFA8', clothes: '#4C7BD9', earrings: false, blush: false, glasses: true, moustache: true, hat: false, dentures: false } },
+      { ...ROOM.seats[0], name: 'Mom', look: { hair: 'bun', hairColor: '#4a2c1a', skin: '#FFCFA8', clothes: '#B565D8', earrings: true, blush: true, glasses: false, moustache: false, hat: false, dentures: false } },
+      { ...ROOM.seats[1], name: 'Grandpa', look: { hair: 'bald', hairColor: '#e8e4da', skin: '#FFCFA8', clothes: '#8A9A5B', earrings: false, blush: false, glasses: false, moustache: false, hat: false, dentures: true } },
+      { ...ROOM.seats[2], name: 'Timmy', look: { hair: 'kid', hairColor: '#3a2a1c', skin: '#FFD9B0', clothes: '#FFC94A', earrings: false, blush: true, glasses: false, moustache: false, hat: true, dentures: false, gapTooth: true } },
+      { ...ROOM.seats[3], name: 'Dad', look: { hair: 'short', hairColor: '#26221f', skin: '#FFCFA8', clothes: '#4C7BD9', earrings: false, blush: false, glasses: true, moustache: true, hat: false, dentures: false } },
     ];
     this.humans = seats.slice(0, HUMANS.count).map((s, i) => ({
       ...s,

@@ -137,6 +137,59 @@ export function applyPose(game, name) {
     game.missBar = { t: 0.55, dur: 1.25, pressRemainMs: null, lateMs: 140 };
     return;
   }
+  if (name === 'slam') {
+    // The painted palm mid-slam on the soup, cuff tinted to Dad.
+    play(33);
+    const zone = table.propAt(soup.x, soup.y);
+    const atk = director.startAttack(dad, soup.x, soup.y, 33, { target: zone });
+    atk.state = 'slam';
+    atk.t = 0.04;
+    fly.x = soup.x + atk.radius + 40;
+    fly.y = soup.y - 26;
+    fly.vx = 330;
+    fly.vy = -60;
+    fly.flashing = true;
+    fly.iframesT = 0.15;
+    dad.expression = 'angry';
+    game.combo = 5;
+    game.score = 6700;
+    return;
+  }
+
+  if (name === 'aftermath') {
+    // Mid-ruin: emptied soup, scattered greens, a cracked plate,
+    // stains on the cloth, a slapped Dad, a soup-faced Mom, and
+    // the dog arriving for the chicken.
+    play(47);
+    const chicken = table.foods[3];
+    soup.state = 'empty';
+    greens.state = 'smashed';
+    cake.creamSplats = 1;
+    const plate = table.dressing.find((d) => d.kind === 'plate');
+    if (plate) plate.state = 'smashed';
+    game.stains.push(
+      { kind: 'stain-soup', x: soup.x + 36, y: soup.y + 52, rot: 0.7, w: 124 },
+      { kind: 'stain-cream', x: cake.x - 70, y: cake.y + 44, rot: 2.1, w: 110 },
+      { kind: 'stain-cyan', x: greens.x + 88, y: greens.y - 60, rot: 1.2, w: 92 },
+      { kind: 'stain-soup', x: chicken.x - 96, y: chicken.y - 40, rot: 2.8, w: 100 },
+    );
+    dad.expression = 'slapped';
+    dad.exprT = 9;
+    dad.palmPrint = true;
+    mom.soupFace = true;
+    mom.expression = 'scared';
+    mom.exprT = 9;
+    game.dog = { x: chicken.x - 130, y: chicken.y + 36, state: 'idle', t: 9, dirX: 1, checkT: 0 };
+    fly.x = greens.x + 92;
+    fly.y = greens.y + 58;
+    fly.vx = 0;
+    fly.vy = 0;
+    game.combo = 6; // golden fly
+    game.score = 12400;
+    game.chaosTotal = 2100;
+    return;
+  }
+
   if (name === 'results') {
     play(90);
     game.score = 17400;

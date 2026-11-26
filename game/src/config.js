@@ -10,9 +10,21 @@ export const VIEW = {
   height: 800,
 };
 
+// The room geometry is measured off the painted background (F1b):
+// the cloth rectangle and the four chairs in the painting are
+// where the game now agrees they are (v3 art pass). BG transform
+// in sprites.js: scale 1280/1536, vertical centre.
 export const ROOM = {
-  table: { x: 240, y: 172, w: 800, h: 478, r: 40 },
-  lamp: { x: 640, y: 96 },
+  table: { x: 212, y: 172, w: 860, h: 526, r: 40 },
+  lamp: { x: 700, y: 88 },
+  // Head centres on the painting's chairs: Mom north, Grandpa
+  // west, Timmy east, Dad south (the order table.js seats them).
+  seats: [
+    { x: 620, y: 106 },
+    { x: 146, y: 389 },
+    { x: 1138, y: 389 },
+    { x: 760, y: 744 },
+  ],
 };
 
 export const PALETTE = {

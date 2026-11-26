@@ -8,6 +8,7 @@
 
 import { PALETTE, VIEW } from './config.js';
 import { warnProgress, grandpaStalled } from './humans.js';
+import { spritesReady, bgReady, drawBgImage, drawSprite, drawHead, drawPalm } from './sprites.js';
 
 const TAU = Math.PI * 2;
 const OUTLINE = PALETTE.ink;
@@ -139,6 +140,24 @@ export class Renderer {
 
   drawRoom(game, t) {
     const ctx = this.ctx;
+    // The painted room (F1b): floor, rug, chairs and the empty
+    // table itself are one picture now. The light pool and the
+    // vignette stay code — they move and darken with the game.
+    if (drawBgImage(ctx)) {
+      const lamp = game.table.lamp;
+      const sway = game.table.lampSwingT > 0 ? Math.sin(t * 9) * 16 * (game.table.lampSwingT / 3) : 0;
+      const pool = ctx.createRadialGradient(lamp.x + sway, lamp.y, 60, lamp.x + sway, lamp.y, 520);
+      pool.addColorStop(0, 'rgba(255,205,110,0.20)');
+      pool.addColorStop(1, 'rgba(255,205,110,0)');
+      ctx.fillStyle = pool;
+      ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+      const vg = ctx.createRadialGradient(640, 400, 380, 640, 400, 900);
+      vg.addColorStop(0, 'rgba(11,6,18,0)');
+      vg.addColorStop(1, 'rgba(11,6,18,0.5)');
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+      return;
+    }
     ctx.fillStyle = PALETTE.floor;
     ctx.fillRect(-30, -30, VIEW.width + 60, VIEW.height + 60);
     // Rug under the table.
@@ -185,32 +204,42 @@ export class Renderer {
     const ctx = this.ctx;
     const tb = game.table;
     const r = tb.rect;
-    // Wooden rim, then the cream checked cloth.
-    ctx.fillStyle = PALETTE.wood;
-    roundRect(ctx, r.x - 14, r.y - 14, r.w + 28, r.h + 28, 18);
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = OUTLINE;
-    ctx.stroke();
-    ctx.fillStyle = PALETTE.cloth;
-    roundRect(ctx, r.x, r.y, r.w, r.h, 12);
-    ctx.fill();
-    ctx.save();
-    roundRect(ctx, r.x, r.y, r.w, r.h, 12);
-    ctx.clip();
-    ctx.strokeStyle = PALETTE.clothGrid;
-    ctx.lineWidth = 2;
-    for (let x = r.x + 34; x < r.x + r.w; x += 34) {
-      ctx.beginPath();
-      ctx.moveTo(x, r.y);
-      ctx.lineTo(x, r.y + r.h);
+    const painted = bgReady();
+    if (!painted) {
+      // Wooden rim, then the cream checked cloth (code fallback
+      // while the painting loads; F1b has both baked in).
+      ctx.fillStyle = PALETTE.wood;
+      roundRect(ctx, r.x - 14, r.y - 14, r.w + 28, r.h + 28, 18);
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = OUTLINE;
       ctx.stroke();
+      ctx.fillStyle = PALETTE.cloth;
+      roundRect(ctx, r.x, r.y, r.w, r.h, 12);
+      ctx.fill();
+      ctx.save();
+      roundRect(ctx, r.x, r.y, r.w, r.h, 12);
+      ctx.clip();
+      ctx.strokeStyle = PALETTE.clothGrid;
+      ctx.lineWidth = 2;
+      for (let x = r.x + 34; x < r.x + r.w; x += 34) {
+        ctx.beginPath();
+        ctx.moveTo(x, r.y);
+        ctx.lineTo(x, r.y + r.h);
+        ctx.stroke();
+      }
+      for (let y = r.y + 34; y < r.y + r.h; y += 34) {
+        ctx.beginPath();
+        ctx.moveTo(r.x, y);
+        ctx.lineTo(r.x + r.w, y);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
-    for (let y = r.y + 34; y < r.y + r.h; y += 34) {
-      ctx.beginPath();
-      ctx.moveTo(r.x, y);
-      ctx.lineTo(r.x + r.w, y);
-      ctx.stroke();
+    // The cloth remembers every slap: stain decals accumulate
+    // where impacts land and stay for the rest of the run.
+    for (const s of game.stains) {
+      drawSprite(ctx, s.kind, s.x, s.y, { w: s.w, rot: s.rot, alpha: 0.92 });
     }
     // The spilled-drink puddle (E7) glistens on the cloth.
     if (game.puddle) {
@@ -223,16 +252,22 @@ export class Renderer {
       ctx.ellipse(game.puddle.x - 12, game.puddle.y - 6, 14, 6, 0.3, 0, TAU);
       ctx.fill();
     }
-    ctx.restore();
 
-    // Plates under the food, then the food itself.
+    // Plates under the food, then the food itself. The painted
+    // dishes bring their own plates; only the cake still needs one.
     for (const f of tb.foods) {
-      circle(ctx, f.x, f.y, f.r + 12, '#FFFFFF');
-      shade(ctx, f.x, f.y, f.r + 12);
+      if (!painted || f.id === 'cake') {
+        circle(ctx, f.x, f.y, f.r + 12, '#FFFFFF');
+        shade(ctx, f.x, f.y, f.r + 12);
+      }
       this.drawFood(game, f, t);
     }
     for (const d of tb.dressing) {
-      if (d.state !== 'fresh') continue;
+      if (d.state !== 'fresh') {
+        // A smashed plate stays on the cloth, in pieces.
+        if ((d.kind === 'plate' || d.kind === 'bowl') && drawSprite(ctx, 'plate-cracked', d.x, d.y, { rot: d.rot ?? 0 })) continue;
+        continue;
+      }
       const hop = d.hopT > 0 ? Math.sin((0.35 - d.hopT) / 0.35 * Math.PI) * 7 : 0;
       this.drawProp(game, d.kind, d.x, d.y - hop, d.rot ?? 0, t);
     }
@@ -242,6 +277,7 @@ export class Renderer {
 
   drawFood(game, f, t) {
     const ctx = this.ctx;
+    if (spritesReady() && this.drawFoodSprite(game, f, t)) return;
     if (f.state === 'smashed') {
       // A cheerful splat where dinner used to be.
       ctx.fillStyle = f.color;
@@ -391,8 +427,98 @@ export class Renderer {
     }
   }
 
+  // The painted dishes (S2 intact / S3 damaged, swapped in place
+  // on the same anchor). Live effects the paintings cannot do —
+  // candle flames, soup steam, the finale's golden pulse — stay
+  // code and ride on top.
+  drawFoodSprite(game, f, t) {
+    const ctx = this.ctx;
+    if (f.id === 'cake') {
+      if (f.state === 'smashed') {
+        drawSprite(ctx, 'cake-dead', f.x, f.y, { w: (f.r + 6) * 2 });
+        return true;
+      }
+      if (f.creamSplats >= 2) {
+        // Second hit: the light-damage painting, candles down.
+        drawSprite(ctx, 'cake-light', f.x, f.y, { w: (f.r + 6) * 2 });
+        return true;
+      }
+      drawSprite(ctx, 'cake', f.x, f.y, { w: (f.r + 6) * 2 });
+      if (f.creamSplats === 1) {
+        const a = 2.7 + 1;
+        drawSprite(ctx, 'cream-small', f.x + Math.cos(a) * f.r * 0.8, f.y + Math.sin(a) * f.r * 0.7, { w: 30 });
+      }
+      // Flames by code, one per lit candle, on the painting's ring.
+      for (let i = 0; i < f.candlesLit; i++) {
+        const c = f.candles[i];
+        const cx = f.x + c.dx * 1.19;
+        const cy = f.y + c.dy * 1.32;
+        const fl = 1 + Math.sin(t * 11 + i * 1.7) * 0.25;
+        ctx.fillStyle = '#FFC94A';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy - 6, 3.4 * fl, 5.4 * fl, 0, 0, TAU);
+        ctx.fill();
+        ctx.fillStyle = '#FFF3C4';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy - 5, 1.6 * fl, 2.8 * fl, 0, 0, TAU);
+        ctx.fill();
+      }
+      if (game.finaleArmed && f.state === 'fresh') {
+        const pulse = 1 + Math.sin(t * 5) * 0.1;
+        ctx.strokeStyle = 'rgba(255,201,74,0.9)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, (f.r + 18) * pulse, 0, TAU);
+        ctx.stroke();
+      }
+      return true;
+    }
+    if (f.id === 'soup') {
+      if (f.state !== 'fresh') {
+        drawSprite(ctx, 'soup-empty', f.x, f.y, { w: f.r * 2 + 10 });
+        return true;
+      }
+      drawSprite(ctx, 'soup', f.x, f.y, { w: f.r * 2 + 10 });
+      // Steam by code (the painting was made without it on purpose).
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 3;
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        for (let s = 0; s <= 10; s++) {
+          const yy = f.y - 8 - s * 3.4;
+          const xx = f.x + i * 14 + Math.sin(t * 2.4 + s * 0.7 + i * 2) * 4;
+          if (s === 0) ctx.moveTo(xx, yy);
+          else ctx.lineTo(xx, yy);
+        }
+        ctx.stroke();
+      }
+      return true;
+    }
+    if (f.id === 'greens') {
+      drawSprite(ctx, f.state === 'smashed' ? 'greens-scattered' : 'greens', f.x, f.y, { w: (f.r + 7) * 2 });
+      return true;
+    }
+    if (f.id === 'chicken') {
+      drawSprite(ctx, f.state === 'smashed' ? 'chicken-squashed' : 'chicken', f.x, f.y, { w: (f.r + 12) * 2 });
+      return true;
+    }
+    return false;
+  }
+
   drawProp(game, kind, x, y, rot, t) {
     const ctx = this.ctx;
+    // Painted props: cutlery lies horizontal in its frame (prongs
+    // and blade to the right), so the game's rot applies as-is.
+    // The food hats and the dog's stolen chicken ride here too.
+    if (spritesReady()) {
+      if (kind === 'fork' && drawSprite(ctx, 'fork', x, y, { w: 64, rot })) return;
+      if (kind === 'fork-bent' && drawSprite(ctx, 'fork-bent', x, y, { w: 64, rot })) return;
+      if (kind === 'knife' && drawSprite(ctx, 'knife', x, y, { w: 64, rot })) return;
+      if (kind === 'cup' && drawSprite(ctx, 'cup', x, y, { w: 36, rot })) return;
+      if (kind === 'dentures' && drawSprite(ctx, 'dentures', x, y, { w: 44, rot })) return;
+      if (kind === 'greens' && drawSprite(ctx, 'greens', x, y, { w: 52, rot })) return;
+      if (kind === 'chicken' && drawSprite(ctx, 'chicken', x, y, { w: 56, rot })) return;
+    }
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(rot);
@@ -728,6 +854,25 @@ export class Renderer {
     ctx.strokeStyle = OUTLINE;
     ctx.stroke();
     shade(ctx, 0, R * 0.92, R * 0.8);
+    // The painted head (S1): one frame per expression, all
+    // normalised to the same head diameter at cut time, so the
+    // swap is seamless. "Slapped" is the scared frame, squashed
+    // wide, with the X-eyes decal over it (the plan's recipe).
+    if (spritesReady()) {
+      const key = h.expression === 'slapped' ? 'scared' : h.expression;
+      const drawn = drawHead(ctx, `${h.name.toLowerCase()}-${key}`, 0, 0, R, {
+        sx: h.expression === 'slapped' ? 1.28 : 1,
+        sy: h.expression === 'slapped' ? 0.94 : 1,
+      });
+      if (drawn) {
+        if (h.expression === 'slapped') drawSprite(ctx, 'xeyes', 0, -R * 0.08, { w: 54 });
+        if (h.palmPrint) drawSprite(ctx, 'palmprint', R * 0.34, R * 0.08, { w: 38, rot: 0.5 });
+        if (h.soupFace) drawSprite(ctx, 'soupface', 0, -R * 0.12, { w: 74 });
+        if (h.hatKind) this.drawProp(game, h.hatKind, 0, -R - 4, 0.3, t);
+        ctx.restore();
+        return;
+      }
+    }
     // Head.
     circle(ctx, 0, 0, R, h.look.skin ?? PALETTE.skin);
     shade(ctx, 0, 0, R);
@@ -1017,6 +1162,12 @@ export class Renderer {
     const dog = game.dog;
     if (!dog) return;
     const ctx = this.ctx;
+    // The painted dog (S2): a head peeking over the table edge.
+    // Mid-getaway it still carries the chicken, as a prop.
+    if (drawSprite(ctx, 'dog', dog.x, dog.y + Math.sin(t * 6) * 2, { w: 96, flipX: dog.dirX < 0 })) {
+      if (dog.state === 'run') this.drawProp(game, 'chicken', dog.x + dog.dirX * 34, dog.y + 14, 0.5, t);
+      return;
+    }
     ctx.save();
     ctx.translate(dog.x, dog.y);
     if (dog.dirX < 0) ctx.scale(-1, 1);
@@ -1081,6 +1232,8 @@ export class Renderer {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
+      // The can itself, raised in the sprayer's hand.
+      drawSprite(ctx, 'spray', atk.owner.x + Math.cos(atk.dir) * 44, atk.owner.y + Math.sin(atk.dir) * 44, { w: 44 });
       return;
     }
     if (atk.kind === 'poke') {
@@ -1211,11 +1364,17 @@ export class Renderer {
       // All four hands, one from each side of the table.
       for (const [i, h] of game.table.humans.entries()) {
         const a = Math.atan2(atk.y - h.y, atk.x - h.x);
-        this.handPath(ctx, atk.x - Math.cos(a) * 16 + (i % 2) * 8, atk.y - Math.sin(a) * 16, 1.25 * pop, a + Math.PI / 2);
+        const hx = atk.x - Math.cos(a) * 16 + (i % 2) * 8;
+        const hy = atk.y - Math.sin(a) * 16;
+        if (!drawPalm(ctx, hx, hy, 128 * pop, a + Math.PI / 2, h.look.clothes)) {
+          this.handPath(ctx, hx, hy, 1.25 * pop, a + Math.PI / 2);
+        }
       }
       return;
     }
     if (atk.swatter) {
+      // The painted swatter (S4), tilted like the code one was.
+      if (drawSprite(ctx, 'swatter', atk.x, atk.y - 12, { h: 134 * pop, rot: 0.6 })) return;
       ctx.save();
       ctx.translate(atk.x, atk.y);
       ctx.rotate(0.6);
@@ -1240,6 +1399,8 @@ export class Renderer {
       return;
     }
     if (atk.owner.name === 'Dad' && game.elapsed >= 55) {
+      // The painted newspaper roll (S4), laid across the impact.
+      if (drawSprite(ctx, 'newspaper', atk.x, atk.y, { h: 104 * pop, rot: Math.PI / 2 - 0.5 })) return;
       ctx.save();
       ctx.translate(atk.x, atk.y);
       ctx.rotate(-0.5);
@@ -1267,10 +1428,14 @@ export class Renderer {
       ctx.arc(atk.owner.x, atk.owner.y, 220, atk.dir - 0.52, atk.dir + 0.52);
       ctx.closePath();
       ctx.fill();
+      drawSprite(ctx, 'spray', atk.owner.x + Math.cos(atk.dir) * 44, atk.owner.y + Math.sin(atk.dir) * 44, { w: 44 });
       return;
     }
     if (atk.kind === 'poke') {
-      // Timmy himself, mid-lunge, hat first.
+      // Timmy himself, mid-lunge, hat first — the painted hat
+      // (S4) flies tip-first along the charge line.
+      const ang = Math.atan2(atk.y - atk.fromY, atk.x - atk.fromX);
+      if (drawSprite(ctx, 'party-hat', atk.x, atk.y, { h: 60, rot: ang + Math.PI / 2 })) return;
       ctx.save();
       ctx.translate(atk.x, atk.y);
       ctx.rotate(Math.atan2(atk.y - atk.fromY, atk.x - atk.fromX));
@@ -1288,6 +1453,8 @@ export class Renderer {
       return;
     }
     const a = Math.atan2(atk.y - atk.owner.y, atk.x - atk.owner.x);
+    // The painted palm (S4), its grey cuff tinted to the slapper.
+    if (drawPalm(ctx, atk.x, atk.y, 150 * pop, a + Math.PI / 2, atk.owner.look.clothes)) return;
     this.handPath(ctx, atk.x, atk.y, 1.5 * pop, a + Math.PI / 2);
   }
 
@@ -1360,6 +1527,14 @@ export class Renderer {
       ctx.ellipse(s * 4, -9, 11, 5.5, s * 0.5, 0, TAU);
       ctx.fill();
       ctx.restore();
+    }
+    // The painted body (S4): one frame per combo tier, wings and
+    // effects still code. The frame's head points up, the fly's
+    // forward is +x — a quarter turn bridges them.
+    const tierSprite = { plain: 'fly-plain', gold: 'fly-gold', flame: 'fly-flame', rainbow: 'fly-rainbow' }[tier.id];
+    if (tierSprite && drawSprite(ctx, tierSprite, 0, 0, { w: 40, rot: Math.PI / 2 })) {
+      ctx.restore();
+      return;
     }
     // Body by tier.
     let body = PALETTE.flyBody;

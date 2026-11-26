@@ -15,6 +15,7 @@ import { Renderer } from './render.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { Sound } from './audio.js';
+import { onSpritesReady } from './sprites.js';
 import { Copy, GALLERY } from './copy.js';
 import { applyPose } from './shots.js';
 
@@ -106,6 +107,7 @@ class Game {
     this.rank = null;
     this.particles = [];
     this.texts = [];
+    this.stains = []; // v3 art: cloth stain decals, kept all run
     this.projectiles = [];
     this.landedProps = [];
     this.chainPop = null; // {n, t} the fixed CHAIN banner
@@ -759,10 +761,28 @@ class Game {
     return best;
   }
 
+  // Every impact leaves its mark on the cloth (v3 art): a stain
+  // decal in the spilt thing's colour, seeded rotation and scale,
+  // capped at 30 — the table visibly dirties as the run goes on
+  // and stays dirty behind the results screen.
+  addStain(x, y, targetKind) {
+    // Stains belong on the cloth; a slap that lands on a head at
+    // the table's edge leaves its mark on the face, not the floor.
+    const t = this.table.rect;
+    if (x < t.x - 6 || x > t.x + t.w + 6 || y < t.y - 6 || y > t.y + t.h + 6) return;
+    const byKind = { soup: 'stain-soup', cake: 'stain-cream', cup: 'stain-cyan', teacup: 'stain-cyan' };
+    const kinds = ['stain-soup', 'stain-cream', 'stain-cyan'];
+    const kind = byKind[targetKind] ?? kinds[Math.floor(this.rng() * kinds.length)];
+    const base = { 'stain-soup': 124, 'stain-cream': 114, 'stain-cyan': 88 }[kind];
+    this.stains.push({ kind, x, y, rot: this.rng() * Math.PI * 2, w: base * (0.8 + this.rng() * 0.4) });
+    if (this.stains.length > 30) this.stains.shift();
+  }
+
   // Fire one object's chain event. depth starts at 1 for the thing
   // directly under the hand.
   smash(target, atk, depth) {
     const { x, y } = atk;
+    this.addStain(x, y, target.kind);
     switch (target.kind) {
       case 'head': return this.eventHead(target.ref, atk, depth);
       case 'soup': return this.eventSoup(target.ref, atk, depth);
@@ -900,16 +920,16 @@ class Game {
     const tt = Math.max(0, Math.min(1, ((lamp.x - item.x) * (lx - item.x) + (lamp.y - item.y) * (ly - item.y)) / (segLen * segLen)));
     const lampDist = Math.hypot(lamp.x - (item.x + (lx - item.x) * tt), lamp.y - (item.y + (ly - item.y) * tt));
     if (lampDist < 80 && !this.table.lampDropped && this.eventCd.get('lamp') === undefined) {
-      this.flyProjectile('fork', item.x, item.y, lamp.x, lamp.y, () => this.eventLamp(depth + 1));
+      this.flyProjectile('fork-bent', item.x, item.y, lamp.x, lamp.y, () => this.eventLamp(depth + 1));
     } else {
       const rot = Math.atan2(ly - item.y, lx - item.x);
-      this.flyProjectile('fork', item.x, item.y, lx, ly, () => {
+      this.flyProjectile('fork-bent', item.x, item.y, lx, ly, () => {
         const prop = this.table.propAt(lx, ly);
         if (prop) {
           if (prop.kind === 'cake') this.unlock('forkCake');
           this.smash(prop, { x: lx, y: ly, owner: atk.owner }, depth + 1);
         } else {
-          this.landedProps.push({ kind: 'fork', x: lx, y: ly, rot });
+          this.landedProps.push({ kind: 'fork-bent', x: lx, y: ly, rot });
         }
       });
     }
@@ -1484,6 +1504,8 @@ if (shotName) {
   for (const img of [game.hud.photoClean, game.hud.photoRuined]) {
     if (img && !img.complete) img.addEventListener('load', () => game.draw(0));
   }
+  // Same for the sprite atlas and the painted background.
+  onSpritesReady(() => game.draw(0));
 } else {
   game.state = 'title';
   // P0-4: losing the tab mid-run pauses the party — nobody should
