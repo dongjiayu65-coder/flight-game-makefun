@@ -185,14 +185,27 @@ export const GAME = {
   duration: 90,
   hp: 3,
   hitInvuln: 1.2, // seconds of blink-invulnerability after a hit
-  lifeBonus: 1000, // per remaining life, added at the end (spec 2.6)
+  lifeBonus: 3000, // per remaining life, added at the end (v7 #6: was 1000)
   destructionFull: 6000, // chaos points for 100% party destruction
-  finaleBase: 3000, // x rating mult x M_combo (spec 2.9)
+  // v7 #4: one-off bonuses as PARTY RUINED crosses each mark (flat,
+  // not combo-multiplied).
+  ruinMilestones: [
+    { at: 0.25, bonus: 500 },
+    { at: 0.5, bonus: 1000 },
+    { at: 0.75, bonus: 2000 },
+    { at: 1.0, bonus: 4000 },
+  ],
+  restockAt: 55, // v7 #5: Mom brings seconds — every wrecked dish/prop returns once
+  finaleBase: 2000, // x rating mult x min(M_combo, cap) (v7 #2: was 3000)
+  finaleComboCap: 2.0, // v7 #2: the finale's combo multiplier tops out at x2
   finaleSplatScore: 500, // if the fly is caught in the finale
   ranks: [
-    { id: 'S', min: 28000, stamp: 'TOTAL DISASTER' },
-    { id: 'A', min: 16000, stamp: 'CERTIFIED CHAOS' },
-    { id: 'B', min: 8000, stamp: 'MILDLY RUINED' },
+    // v7 #3: re-estimated for the v7 score model (bets, crumbs,
+    // ruin milestones, 3000/heart, capped finale). First-pass
+    // estimate — recalibrate from the bot score distribution.
+    { id: 'S', min: 50000, stamp: 'TOTAL DISASTER' },
+    { id: 'A', min: 32000, stamp: 'CERTIFIED CHAOS' },
+    { id: 'B', min: 18000, stamp: 'MILDLY RUINED' },
     { id: 'C', min: 0, stamp: 'JUST A FLY' },
   ],
 };
