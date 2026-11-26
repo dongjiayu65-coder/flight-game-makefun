@@ -83,6 +83,60 @@ export function applyPose(game, name) {
     return;
   }
 
+  if (name === 'track') {
+    // P0-1: the warning has been dragged off the soup and is still
+    // hunting the fly (dashed ring, not yet locked on).
+    play(20);
+    const zone = table.propAt(soup.x, soup.y);
+    landOn(zone);
+    const atk = director.startAttack(mom, soup.x, soup.y, 20, { target: zone });
+    atk.t = atk.dur * 0.5;
+    atk.x = soup.x - 52; // mid-drag: pulled toward the fly's escape
+    atk.y = soup.y + 38;
+    mom.expression = 'angry';
+    game.combo = 4;
+    game.score = 3900;
+    return;
+  }
+  if (name === 'preview') {
+    // P1-1: the fly sits on the fork; the ring over it wears the
+    // fork's badge and the dashed arrow shows where it will fly.
+    play(24);
+    const fork = table.dressing.find((d) => d.kind === 'fork');
+    const zone = table.propAt(fork.x, fork.y);
+    landOn(zone);
+    const atk = director.startAttack(grandpa, fork.x, fork.y, 24, { target: zone });
+    atk.t = atk.dur * 0.45;
+    grandpa.expression = 'angry';
+    game.combo = 5;
+    game.score = 5200;
+    return;
+  }
+  if (name === 'crumbs') {
+    // P1-2: a fresh smash has sprayed crumbs around the fly.
+    play(14);
+    fly.x = greens.x + 64;
+    fly.y = greens.y + 44;
+    fly.vx = 0;
+    fly.vy = 0;
+    game.combo = 6;
+    game.score = 3100;
+    game.spawnCrumbs(fly.x - 10, fly.y + 6, 3);
+    game.spawnCrumbs(fly.x + 30, fly.y - 16, 2);
+    game.spawnCrumbs(fly.x - 34, fly.y + 26, 2);
+    return;
+  }
+  if (name === 'missbar') {
+    // P0-3: the replay bar after a late press — the red tick sits
+    // 140ms past the impact line, outside the PERFECT zone.
+    play(18);
+    fly.x = cake.x;
+    fly.y = cake.y;
+    fly.squash();
+    game.score = 4600;
+    game.missBar = { t: 0.55, dur: 1.25, pressRemainMs: null, lateMs: 140 };
+    return;
+  }
   if (name === 'results') {
     play(90);
     game.score = 17400;

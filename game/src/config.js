@@ -174,3 +174,38 @@ export const FOODS = [
 export const HUMANS = {
   count: 4,
 };
+
+// --- v3 gameplay pass (flight-v3-plan.md, 2026-11-26) ----------------
+// P0-1: the palm no longer lands where the taunt started — during
+// the warning the shadow TRACKS the fly at a capped speed, so the
+// wait becomes "walk the hand onto something expensive, then bail".
+// The point locks 350ms before impact (ring goes solid, a "clack").
+// P0-2: the first 30 seconds forgive HP (combo and 10% of the score
+// are the price instead), and a CHAIN x3+ buys a heart back.
+// P1-2: every chain layer sprays crumbs; flying through one extends
+// the combo's decay deadline, shaves the flash cooldown, +20 pts.
+// P1-4: while landed, each left click raises the bet: +0.5 rating
+// multiplier per level, and the live warnings shrink by 10%.
+export const V3 = {
+  trackSpeed: 140, // px/s the warning shadow chases the fly
+  trackSpeedLate: 180, // from 55s (the围攻 phase)
+  trackFrom: 55,
+  lockMs: 350, // impact point locks this long before the slap
+  mercyUntil: 30, // seconds: hits cost combo + 10% score, not HP
+  mercyScoreKeep: 0.9,
+  closeEarlyMs: 260, // the Close window while the mercy lasts
+  chainHealDepth: 3, // a chain this deep refunds one heart
+  crumbPerLayer: [3, 5], // crumbs sprayed per chain layer (min, max)
+  crumbLife: 4, // seconds a crumb waits to be harvested
+  crumbRadius: 28, // fly pickup distance
+  crumbScore: 20,
+  crumbDecayBonus: 0.5, // seconds added to the combo decay deadline
+  crumbCooldownCut: 0.1, // seconds shaved off the flash cooldown
+  crumbGraceCap: 3, // max seconds of banked decay grace
+  betMax: 3,
+  betMultPer: 0.5, // rating multiplier per bet level
+  betWarnCut: 0.1, // each bet eats 10% of the remaining warning
+  timmyOffset: 15, // px: Timmy's locked point jumps by up to this
+  grandpaPauseAt: 0.6, // Grandpa's ring stalls at this progress…
+  grandpaPause: 0.25, // …for this many seconds, hands shaking
+};

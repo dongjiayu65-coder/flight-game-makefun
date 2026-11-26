@@ -6,7 +6,7 @@
 // it lands where the taunt locked it, and whatever is underneath
 // pays for the fly's timing.
 
-import { TAUNT } from './config.js';
+import { TAUNT, V3 } from './config.js';
 
 // Interpolate the spec's timing table (2.2): taunt delay, warning
 // length and personal cooldown all glide, never step.
@@ -28,11 +28,44 @@ export function timingAt(elapsed) {
   return tl[tl.length - 1];
 }
 
+// How far the warning ring has visually shrunk, per the owner's
+// rhythm personality (v3 P1-3). The impact still lands at t = dur —
+// personalities bend the *reading* of the ring, never the clock, so
+// the rating windows stay honest. Dad is the metronome everyone
+// learns on; Grandpa stalls at 60% with shaking hands; Mom dawdles
+// then rushes the last 300ms.
+export function warnProgress(atk) {
+  const u = Math.min(1, atk.t / atk.dur);
+  if (atk.kind !== 'palm') return u;
+  if (atk.personality === 'grandpa') {
+    const h = Math.min(0.2, V3.grandpaPause / atk.dur);
+    if (u <= V3.grandpaPauseAt) return u;
+    if (u <= V3.grandpaPauseAt + h) return V3.grandpaPauseAt;
+    const rest = 1 - V3.grandpaPauseAt - h;
+    return V3.grandpaPauseAt + ((u - V3.grandpaPauseAt - h) / rest) * (1 - V3.grandpaPauseAt);
+  }
+  if (atk.personality === 'mom') {
+    const u0 = Math.max(0.3, 1 - 0.3 / atk.dur);
+    if (u < u0) return 0.75 * u;
+    return 0.75 * u0 + ((u - u0) / (1 - u0)) * (1 - 0.75 * u0);
+  }
+  return u;
+}
+
+// Is Grandpa's ring currently in its shaking stall? (render hook)
+export function grandpaStalled(atk) {
+  if (atk.personality !== 'grandpa' || atk.kind !== 'palm') return false;
+  const u = atk.t / atk.dur;
+  const h = Math.min(0.2, V3.grandpaPause / atk.dur);
+  return u > V3.grandpaPauseAt && u <= V3.grandpaPauseAt + h;
+}
+
 let ATTACK_ID = 1;
 
 export class Director {
-  constructor(table) {
+  constructor(table, rng = Math.random) {
     this.table = table;
+    this.rng = rng;
     this.time = 0;
     this.attacks = []; // palm | spray | poke slots
     this.mist = null; // Mom's lingering spray cloud {x, y, dir, t}
@@ -82,6 +115,13 @@ export class Director {
       radius: TAUNT.impactRadius,
       dur: timing.warn,
       secondPending: false,
+      // v3: rhythm personality (P1-3) and the tracking palm (P0-1).
+      personality: owner.name === 'Grandpa' ? 'grandpa'
+        : owner.name === 'Mom' ? 'mom'
+        : owner.name === 'Timmy' ? 'timmy' : 'dad',
+      trackSpeed: elapsed >= V3.trackFrom ? V3.trackSpeedLate : V3.trackSpeed,
+      locked: false,
+      justLocked: false,
     };
     if (kind === 'palm') {
       if (owner.name === 'Grandpa' && elapsed >= TAUNT.swatterAt) {
@@ -134,9 +174,46 @@ export class Director {
     return Math.abs(diff) < TAUNT.sprayHalfAngle;
   }
 
+  // The tracking palm (v3 P0-1): until the lock moment, a warning's
+  // impact point chases the fly at a capped speed — palms and hat
+  // charges drag their centre, Mom's spray rotates its fan. The
+  // finale is scripted onto the cake and never tracks. At 350ms out
+  // the point locks; Timmy's locked point jumps (he's fast, not
+  // accurate), which is his whole personality.
+  track(atk, dt, fly) {
+    if (!fly || atk.finale) return;
+    const remain = atk.dur - atk.t;
+    if (atk.locked) return;
+    if (remain <= V3.lockMs / 1000) {
+      atk.locked = true;
+      atk.justLocked = true;
+      if (atk.personality === 'timmy') {
+        atk.x += (this.rng() * 2 - 1) * V3.timmyOffset;
+        atk.y += (this.rng() * 2 - 1) * V3.timmyOffset;
+      }
+      return;
+    }
+    if (atk.kind === 'spray') {
+      const want = Math.atan2(fly.y - atk.owner.y, fly.x - atk.owner.x);
+      let diff = want - atk.dir;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      const turn = 1.6 * dt;
+      atk.dir += Math.max(-turn, Math.min(turn, diff));
+      return;
+    }
+    const dx = fly.x - atk.x;
+    const dy = fly.y - atk.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 0.01) return;
+    const step = Math.min(d, atk.trackSpeed * dt);
+    atk.x += (dx / d) * step;
+    atk.y += (dy / d) * step;
+  }
+
   // Advance everything. Returns the list of attacks that reached
   // their impact frame this step (the game resolves them).
-  update(dt) {
+  update(dt, fly = null) {
     this.time += dt;
     const impacts = [];
     for (const h of this.table.humans) {
@@ -156,6 +233,7 @@ export class Director {
     }
     for (const atk of this.attacks) {
       atk.t += dt;
+      if (atk.state === 'warning') this.track(atk, dt, fly);
       if (atk.state === 'warning' && atk.t >= atk.dur) {
         atk.state = 'slam';
         atk.t = 0;

@@ -6,7 +6,7 @@
 // instead, in chains (E1-E10). Combo feeds chaos, chaos feeds
 // combo. Three hits or ninety seconds end the party.
 
-import { VIEW, ROOM, FLY, TAUNT, RATINGS, PERFECT_GRACE_MS, FINALE_PERFECT_MS, COMBO, EVENTS, RANDOM_EVENTS, PHASES, GAME } from './config.js';
+import { VIEW, ROOM, FLY, TAUNT, RATINGS, PERFECT_GRACE_MS, FINALE_PERFECT_MS, COMBO, EVENTS, RANDOM_EVENTS, PHASES, GAME, V3 } from './config.js';
 import { makeRng } from './random.js';
 import { Table } from './table.js';
 import { Fly } from './fly.js';
@@ -67,7 +67,7 @@ class Game {
     this.metaGallery = META.gallery;
     this.bestScore = META.best;
     this.table = new Table(seed);
-    this.director = new Director(this.table);
+    this.director = new Director(this.table, makeRng(seed * 29 + 3));
     const dad = this.table.humans[3];
     this.fly = new Fly(makeRng(seed * 7 + 1), dad.x, dad.y - 6);
     this.clock = 0; // real run clock (tutorial included)
@@ -121,6 +121,17 @@ class Game {
     this.soupRefillAt = -1;
     this.showKeycap = false;
     this.ghostTarget = null;
+    // --- v3 state -----------------------------------------------------
+    this.bet = 0; // P1-4: raised stakes while landed (0..V3.betMax)
+    this.betAtFlash = 0; // the bet captured by the dodge that spends it
+    this.crumbs = []; // P1-2: harvestable chain debris
+    this.decayDeadline = -99; // combo decay starts after this clock
+    this.chainHealUsed = false; // per-chain-root: the x3 heart refund
+    this.chainCounted = false; // per-chain-root: the x3 stat
+    this.chain3Count = 0; // chains that reached depth >= 3 this run
+    this.missBar = null; // P0-3: the "how late were you" replay bar
+    this.lastDodgePress = null; // {clock, remainMs} of the last dodge input
+    this.focusPaused = false; // P0-4: tab lost focus mid-run
     this.hudSlideT = META.runs === 0 ? 0 : 1;
     this.events = { soupFace: false, cakeBoom: false, glasses: false, dentures: false, palmPrint: false, forkChain: false };
   }
@@ -229,14 +240,23 @@ class Game {
       }
     }
 
+    if (input.flashPressed) this.noteDodgePress();
     this.handleFlash(input);
     const inMist = this.director.mistHolds(this.fly.x, this.fly.y);
     this.fly.update(dt, input.steer, null, inMist);
     this.sound.buzz(true);
 
-    const impacts = this.director.update(dt);
+    const impacts = this.director.update(dt, this.fly);
+    // The lock "clack" (P0-1): the moment a tracking point settles.
+    for (const atk of this.director.attacks) {
+      if (atk.justLocked) {
+        atk.justLocked = false;
+        this.sound.lock();
+      }
+    }
     for (const atk of impacts) this.resolveImpact(atk);
     this.trackEscapes();
+    this.crumbLogic(dt);
 
     this.tutorialLogic(dt);
     this.landingLogic(dt);
@@ -244,7 +264,7 @@ class Game {
     this.dogLogic(dt);
     this.phaseLogic();
     this.expressionLogic();
-    this.sound.update(dt, { playing: true, flySpeed: this.fly.speed, landed: !!this.fly.landedOn, warnMs: this.warnRemainMs() });
+    this.sound.update(dt, { playing: true, flySpeed: this.fly.speed, landed: !!this.fly.landedOn, warnMs: this.warnRemainMs(), bet: this.bet });
 
     if (this.resultsAt > 0 && this.clock >= this.resultsAt) return this.finish(this.endReason);
     if (this.hp <= 0) return this.finish('GAME OVER');
@@ -260,6 +280,71 @@ class Game {
       if (best === null || remain < best) best = remain;
     }
     return best;
+  }
+
+  // Every dodge input is timestamped against the tightest live
+  // warning, so a splat can show the player exactly where their
+  // press fell (P0-3) — and a press that lands just *after* the
+  // impact is measured as the "late" it felt like.
+  noteDodgePress() {
+    const remainMs = this.warnRemainMs();
+    if (remainMs != null) this.lastDodgePress = { clock: this.clock, remainMs };
+    if (this.missBar && this.missBar.lateMs == null && this.missBar.t <= 0.35) {
+      this.missBar.lateMs = Math.round(this.missBar.t * 1000);
+    }
+  }
+
+  // P1-4: while landed, a left click raises the bet instead of
+  // dodging. Each level multiplies the coming rating and eats 10%
+  // of the remaining warning — greed, priced in milliseconds.
+  placeBet() {
+    if (this.bet >= V3.betMax || !this.fly.landedOn) return;
+    this.bet++;
+    for (const atk of this.director.attacks) {
+      if (atk.state === 'warning' && !atk.finale) {
+        atk.t += (atk.dur - atk.t) * V3.betWarnCut;
+      }
+    }
+    this.floatText(this.fly.x, this.fly.y - 46, `BET x${(1 + V3.betMultPer * this.bet).toFixed(1)}`, '#FF3FA4', 24);
+    this.sound.bet(this.bet);
+  }
+
+  // P1-2: chain debris. Crumbs pop out of every smashed layer, sit
+  // for a few seconds, and pay the fly that harvests them: score,
+  // a shaved flash cooldown, and a longer combo fuse.
+  spawnCrumbs(x, y, depth) {
+    const n = V3.crumbPerLayer[0] + Math.floor(this.rng() * (V3.crumbPerLayer[1] - V3.crumbPerLayer[0] + 1));
+    const colors = ['#FFC94A', '#E8743B', '#FFD1DC', '#5FD3B5', '#FFF3C4'];
+    for (let i = 0; i < n; i++) {
+      const a = this.rng() * Math.PI * 2;
+      const d = 14 + this.rng() * 74;
+      this.crumbs.push({
+        x: x + Math.cos(a) * d, y: y + Math.sin(a) * d * 0.8,
+        t: 0, life: V3.crumbLife, size: 3.4 + this.rng() * 2.2,
+        color: colors[Math.floor(this.rng() * colors.length)],
+        phase: this.rng() * Math.PI * 2,
+      });
+    }
+    if (this.crumbs.length > 60) this.crumbs.splice(0, this.crumbs.length - 60);
+  }
+
+  crumbLogic(dt) {
+    for (const c of this.crumbs) c.t += dt;
+    this.crumbs = this.crumbs.filter((c) => c.t < c.life);
+    if (this.fly.squashT > 0) return;
+    for (let i = this.crumbs.length - 1; i >= 0; i--) {
+      const c = this.crumbs[i];
+      if (Math.hypot(this.fly.x - c.x, this.fly.y - c.y) < V3.crumbRadius) {
+        this.crumbs.splice(i, 1);
+        this.score += V3.crumbScore;
+        this.fly.cooldownT = Math.max(0, this.fly.cooldownT - V3.crumbCooldownCut);
+        if (this.combo > 0) {
+          this.decayDeadline = Math.min(this.decayDeadline + V3.crumbDecayBonus, this.clock + COMBO.decayAfter + V3.crumbGraceCap);
+        }
+        this.burst(c.x, c.y, 4, c.color, 60, 2, 0.3, 200);
+        this.sound.crumb();
+      }
+    }
   }
 
   // Flash direction rules (spec 3.2): if a warning has the fly
@@ -299,11 +384,20 @@ class Game {
 
   handleFlash(input) {
     this.lastMouse = input.steer ?? this.lastMouse;
+    // A fired flash spends the raised bet (P1-4): the dodge that
+    // leaves with the money is graded on the multiplied rating.
+    const spendBet = () => {
+      this.betAtFlash = this.bet;
+      this.bet = 0;
+    };
     if (input.flashPressed) {
       if (this.fly.flashReady) {
         const tgt = this.flashTarget();
         const cd = this.tier.id === 'flame' || this.tier.id === 'rainbow' ? FLY.flashCooldownFlame : FLY.flashCooldown;
-        if (this.fly.startFlash(tgt.x, tgt.y, cd)) this.sound.dash(0.8);
+        if (this.fly.startFlash(tgt.x, tgt.y, cd)) {
+          spendBet();
+          this.sound.dash(0.8);
+        }
       } else {
         this.fly.bufferFlash();
         this.pendingFlash = true;
@@ -313,7 +407,10 @@ class Game {
       this.pendingFlash = false;
       const tgt = this.flashTarget();
       const cd = this.tier.id === 'flame' || this.tier.id === 'rainbow' ? FLY.flashCooldownFlame : FLY.flashCooldown;
-      if (this.fly.startFlash(tgt.x, tgt.y, cd)) this.sound.dash(0.8);
+      if (this.fly.startFlash(tgt.x, tgt.y, cd)) {
+        spendBet();
+        this.sound.dash(0.8);
+      }
     }
     // The "pop" when the flash comes back (spec 3.2).
     const ready = this.fly.flashReady;
@@ -368,6 +465,14 @@ class Game {
 
     const flyCaught = this.flyInShape(atk, this.fly.x, this.fly.y) && this.fly.iframesT <= 0 && this.fly.invulnT <= 0 && this.fly.squashT <= 0;
     if (flyCaught) {
+      // P0-3: leave a replay bar behind — where the player's press
+      // fell against the PERFECT window, or that there never was one.
+      if (!atk.tutorial) {
+        const press = this.lastDodgePress && this.clock - this.lastDodgePress.clock <= atk.dur + 0.05
+          ? this.lastDodgePress : null;
+        this.missBar = { t: 0, dur: 1.25, pressRemainMs: press ? Math.round(press.remainMs) : null, lateMs: null };
+        this.lastDodgePress = null;
+      }
       this.hitFly(atk);
       if (atk.finale) this.finaleExplosion(atk, false);
       return;
@@ -381,21 +486,50 @@ class Game {
     } else if (atk.wasInside) {
       this.floatText(this.fly.x, this.fly.y - 26, this.copy.ratingLabel('slipped'), '#bdb2a0', 18);
     }
-    // The hand still lands on whatever was underneath.
+    // The hand lands on whatever is underneath *now* (v3 P0-1):
+    // the point was dragged during the warning, so the victim is
+    // read off the impact spot, not the taunt that started it. The
+    // dog outranks the dishes, exactly as it does for landing.
     if (atk.kind === 'palm' || atk.kind === 'poke') {
-      if (atk.finale) this.finaleExplosion(atk, true);
-      else if (atk.target && !atk.idle) this.smash(atk.target, atk, 1);
-      // Dad's newspaper comes down a second time (spec 2.7).
-      if (atk.secondPending) {
-        const { owner, x, y, target } = atk;
-        this.queueEvent(TAUNT.doubleGap, () => {
-          const second = this.director.startAttack(owner, x, y, this.elapsed, { target, noWeapon: true });
-          second.radius = 65;
-          second.dur = 0.5;
-          second.pairId = atk.id;
-          this.sound.warn();
-        });
-        atk.pairId = atk.id;
+      if (atk.finale) {
+        this.finaleExplosion(atk, true);
+      } else if (!atk.idle) {
+        let under = null;
+        if (this.dog && this.dog.state === 'idle' && Math.hypot(atk.x - this.dog.x, atk.y - this.dog.y) < 46) {
+          under = { kind: 'dog', ref: this.dog, x: this.dog.x, y: this.dog.y, r: 34 };
+        } else {
+          under = this.table.propAt(atk.x, atk.y);
+        }
+        const smashTarget = under ?? atk.target;
+        this.chainHealUsed = false;
+        this.chainCounted = false;
+        if (smashTarget) this.smash(smashTarget, atk, 1);
+        // The slam shoves the neighbouring dressing around: the
+        // table layout is never quite the same twice (P1-1).
+        const t = this.table.rect;
+        for (const d of this.table.dressing) {
+          if (d.state !== 'fresh' || d === smashTarget?.ref) continue;
+          const dd = Math.hypot(d.x - atk.x, d.y - atk.y);
+          if (dd < atk.radius + 26 && dd > 1) {
+            const push = 8 + this.rng() * 14;
+            d.x = Math.min(t.x + t.w - 24, Math.max(t.x + 24, d.x + ((d.x - atk.x) / dd) * push));
+            d.y = Math.min(t.y + t.h - 24, Math.max(t.y + 24, d.y + ((d.y - atk.y) / dd) * push));
+            d.rot = (d.rot ?? 0) + (this.rng() - 0.5) * 0.9;
+          }
+        }
+        // Dad's newspaper comes down a second time (spec 2.7).
+        if (atk.secondPending) {
+          const { owner, x, y } = atk;
+          const target = smashTarget;
+          this.queueEvent(TAUNT.doubleGap, () => {
+            const second = this.director.startAttack(owner, x, y, this.elapsed, { target, noWeapon: true });
+            second.radius = 65;
+            second.dur = 0.5;
+            second.pairId = atk.id;
+            this.sound.warn();
+          });
+          atk.pairId = atk.id;
+        }
       }
     }
   }
@@ -405,8 +539,10 @@ class Game {
     if (this.fly.iframesT > 0) remainMs = Math.min(remainMs, PERFECT_GRACE_MS + 54);
     let rating = RATINGS[RATINGS.length - 1];
     const perfectWindow = atk.finale ? FINALE_PERFECT_MS : RATINGS[0].maxRemainMs;
+    // P0-2: while the early mercy lasts, Close forgives 260ms.
+    const closeWindow = this.elapsed < V3.mercyUntil ? V3.closeEarlyMs : RATINGS[1].maxRemainMs;
     for (const r of RATINGS) {
-      const win = r.id === 'perfect' ? perfectWindow : r.maxRemainMs;
+      const win = r.id === 'perfect' ? perfectWindow : r.id === 'close' ? closeWindow : r.maxRemainMs;
       if (remainMs <= win) {
         rating = r;
         break;
@@ -415,6 +551,9 @@ class Game {
     if (atk.tutorial === 'nose') rating = RATINGS[0]; // the scripted first one is always PERFECT
     const mCombo = comboMult(this.combo);
     let gained = 100 * rating.mult * mCombo * (this.tier.id !== 'plain' ? 1.1 : 1);
+    // P1-4: the bet the fly flashed away with multiplies the grade.
+    if (!atk.finale && this.betAtFlash > 0) gained *= 1 + V3.betMultPer * this.betAtFlash;
+    this.betAtFlash = 0;
     if (rating.id === 'perfect') gained += 50;
     if (this.blackoutT > 0) gained *= 1.5;
     gained = Math.round(gained);
@@ -451,6 +590,7 @@ class Game {
       this.combo++;
       this.maxCombo = Math.max(this.maxCombo, this.combo);
       this.lastGoodClock = this.clock;
+      this.decayDeadline = this.clock + COMBO.decayAfter;
       this.decayAcc = 0;
       const tier = this.tier;
       if (tier.id !== this.lastTier) {
@@ -463,6 +603,7 @@ class Game {
       }
     } else if (rating.id === 'good') {
       this.lastGoodClock = this.clock;
+      this.decayDeadline = this.clock + COMBO.decayAfter;
       this.decayAcc = 0;
     }
     if (rating.id === 'perfect' && this.blackoutT > 0) this.unlock('blackoutPerfect');
@@ -487,18 +628,33 @@ class Game {
 
   hitFly(atk) {
     const tutorial = !!atk.tutorial;
+    // P0-2: in the first 30 seconds a splat costs the combo and a
+    // tenth of the score — never a heart. The party still has its
+    // second act to show the reviewer.
+    const mercy = !tutorial && this.elapsed < V3.mercyUntil;
+    this.bet = 0;
+    this.betAtFlash = 0;
     if (!tutorial) {
-      this.hp--;
       if (this.combo > 0 && this.tier.id !== 'plain') this.sound.poof();
       this.combo = 0;
       this.lastTier = 'plain';
+      if (mercy) {
+        this.score = Math.floor(this.score * V3.mercyScoreKeep);
+      } else {
+        this.hp--;
+      }
     }
     this.fly.squash();
     this.sound.splat();
     this.freezeT = Math.max(this.freezeT, 0.15);
     this.shakeAmp = Math.max(this.shakeAmp, 12);
     this.redFlashT = 0.3;
-    this.floatText(this.fly.x, this.fly.y - 30, this.copy.ratingLabel('splat'), '#FF5A4E', 32);
+    if (mercy) {
+      this.floatText(this.fly.x, this.fly.y - 34, 'Lucky fly!', '#5FD3B5', 28);
+      this.sound.lucky();
+    } else {
+      this.floatText(this.fly.x, this.fly.y - 30, this.copy.ratingLabel('splat'), '#FF5A4E', 32);
+    }
     if (this.hp <= 0 && !tutorial) {
       this.endReason = 'GAME OVER';
       this.resultsAt = this.clock + 1.0;
@@ -512,11 +668,29 @@ class Game {
     const gained = Math.round(points * chainMult * comboMult(this.combo));
     this.score += gained;
     this.chaosTotal += points * chainMult;
+    // Every smashed layer sprays harvestable crumbs (P1-2).
+    this.spawnCrumbs(x, y, depth);
     if (depth >= 2) {
       this.longestChain = Math.max(this.longestChain, depth);
       this.chainPop = { n: depth, t: 0 };
       if (depth >= 5) this.unlock('dominoDinner');
       this.sound.chain();
+    }
+    // P0-2: a chain that reaches x3 refunds a heart — wrecking the
+    // party *is* the survival strategy. Once per chain root.
+    if (depth >= V3.chainHealDepth) {
+      if (!this.chainCounted) {
+        this.chainCounted = true;
+        this.chain3Count++;
+      }
+      if (!this.chainHealUsed) {
+        this.chainHealUsed = true;
+        if (this.hp < GAME.hp && this.tutorial === 'done') {
+          this.hp++;
+          this.floatText(this.fly.x, this.fly.y - 52, '+1 HP', '#FF5A4E', 24);
+          this.sound.ding();
+        }
+      }
     }
     this.floatText(x, y - 18, `+${gained}`, '#FFC94A', 19, { flyTo: true });
     return gained;
@@ -524,6 +698,65 @@ class Game {
 
   quipAt(human, text) {
     this.floatText(human.x, human.y - 62, text, '#ffffff', 22, { bubble: true });
+  }
+
+  // --- directional chain geometry (v3 P1-1) -------------------------
+  // Derivations fly *away from the impact*: drag the hand to the far
+  // side of the soup and the splash finds a different face. The
+  // renderer previews these exact helpers, so what you see aimed is
+  // what goes off. Only the deepest layers keep their dice.
+
+  // Soup splashes through the bowl, away from the slap's centre:
+  // the face nearest the splash line, with the bowl's nearest face
+  // as a fallback (the family sits far from the soup).
+  splashVictim(soup, atk) {
+    const dx = soup.x - atk.x;
+    const dy = soup.y - atk.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = soup.x + (dx / len) * 120;
+    const py = soup.y + (dy / len) * 120;
+    let best = null;
+    let bd = Infinity;
+    for (const h of this.table.humans) {
+      const d = Math.hypot(h.x - px, h.y - py);
+      if (d < bd) { bd = d; best = h; }
+    }
+    if (bd < 240) return best;
+    best = null;
+    bd = Infinity;
+    for (const h of this.table.humans) {
+      const d = Math.hypot(h.x - soup.x, h.y - soup.y);
+      if (d < bd) { bd = d; best = h; }
+    }
+    return bd < 350 ? best : null;
+  }
+
+  // Cutlery launches along impact-centre -> cutlery, kept on the cloth.
+  cutleryLanding(item, atk) {
+    const dx = item.x - atk.x;
+    const dy = item.y - atk.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const t = this.table.rect;
+    return {
+      x: Math.min(t.x + t.w - 16, Math.max(t.x + 16, item.x + (dx / len) * 260)),
+      y: Math.min(t.y + t.h - 16, Math.max(t.y + 16, item.y + (dy / len) * 260)),
+    };
+  }
+
+  // A flying dish lands on the head nearest its escape line.
+  foodHatVictim(food, atk) {
+    const dx = food.x - atk.x;
+    const dy = food.y - atk.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = food.x + (dx / len) * 150;
+    const py = food.y + (dy / len) * 150;
+    let best = null;
+    let bd = Infinity;
+    for (const h of this.table.humans) {
+      const d = Math.hypot(h.x - px, h.y - py);
+      if (d < bd) { bd = d; best = h; }
+    }
+    return best;
   }
 
   // Fire one object's chain event. depth starts at 1 for the thing
@@ -627,17 +860,10 @@ class Game {
     this.soupRefillAt = this.clock + EVENTS.soup.cooldown;
     this.burst(soup.x, soup.y, 26, '#E8743B', 190, 3.4, 0.7, 600);
     this.burst(soup.x, soup.y, 10, '#FFC94A', 140, 2.4, 0.6, 600);
-    // The splash finds the nearest other face within reach.
-    let best = null;
-    let bd = Infinity;
-    for (const h of this.table.humans) {
-      const d = Math.hypot(h.x - soup.x, h.y - soup.y);
-      if (d < bd) {
-        bd = d;
-        best = h;
-      }
-    }
-    if (best && bd < 200) {
+    // The splash flies away from the slap's centre (P1-1): which
+    // face it finds is a matter of where the hand came down.
+    const best = this.splashVictim(soup, atk);
+    if (best) {
       best.soupFace = true;
       best.blockedT = Math.max(best.blockedT, 3); // standing, dripping, useless
       best.expression = 'scared';
@@ -646,17 +872,15 @@ class Game {
       this.events.soupFace = true;
       this.quipAt(best, this.copy.quipFor('soup', best.name));
       if (best.name === 'Mom') this.unlock('soupBun');
-      // Derivation (60%): the victim bumps the table; something hops.
-      if (this.rng() < 0.6) {
-        this.queueEvent(0.3, () => {
-          const fresh = this.table.dressing.filter((d) => d.state === 'fresh');
-          if (fresh.length) {
-            const d = fresh[Math.floor(this.rng() * fresh.length)];
-            d.hopT = 0.35;
-            this.burst(d.x, d.y - 6, 4, 'rgba(200,170,120,0.8)', 50, 2, 0.3, 400);
-          }
-        });
-      }
+      // Derivation: the victim bumps the table; something hops.
+      this.queueEvent(0.3, () => {
+        const fresh = this.table.dressing.filter((d) => d.state === 'fresh');
+        if (fresh.length) {
+          const d = fresh[Math.floor(this.rng() * fresh.length)];
+          d.hopT = 0.35;
+          this.burst(d.x, d.y - 6, 4, 'rgba(200,170,120,0.8)', 50, 2, 0.3, 400);
+        }
+      });
     }
   }
 
@@ -667,21 +891,25 @@ class Game {
     item.stateT = 0;
     this.events.forkChain = true;
     this.floatText(item.x, item.y - 30, this.copy.quipFor('cutlery'), '#ffffff', 21, { bubble: true });
-    // Derivation: up into the lamp (20%), or down onto a new victim.
-    const roll = this.rng();
-    const ang = this.rng() * Math.PI * 2;
-    const lx = item.x + Math.cos(ang) * 260;
-    const ly = item.y + Math.sin(ang) * 200;
-    if (roll < 0.2 && !this.table.lampDropped && this.eventCd.get('lamp') === undefined) {
-      this.flyProjectile('fork', item.x, item.y, this.table.lamp.x, this.table.lamp.y, () => this.eventLamp(depth + 1));
+    // Derivation (P1-1): the fork flies along impact-centre ->
+    // fork, and whatever sits at the end of that line is next. If
+    // the line carries it past the chandelier, the lamp takes it.
+    const { x: lx, y: ly } = this.cutleryLanding(item, atk);
+    const lamp = this.table.lamp;
+    const segLen = Math.hypot(lx - item.x, ly - item.y) || 1;
+    const tt = Math.max(0, Math.min(1, ((lamp.x - item.x) * (lx - item.x) + (lamp.y - item.y) * (ly - item.y)) / (segLen * segLen)));
+    const lampDist = Math.hypot(lamp.x - (item.x + (lx - item.x) * tt), lamp.y - (item.y + (ly - item.y) * tt));
+    if (lampDist < 80 && !this.table.lampDropped && this.eventCd.get('lamp') === undefined) {
+      this.flyProjectile('fork', item.x, item.y, lamp.x, lamp.y, () => this.eventLamp(depth + 1));
     } else {
+      const rot = Math.atan2(ly - item.y, lx - item.x);
       this.flyProjectile('fork', item.x, item.y, lx, ly, () => {
         const prop = this.table.propAt(lx, ly);
-        if (prop && this.rng() < 0.7) {
+        if (prop) {
           if (prop.kind === 'cake') this.unlock('forkCake');
           this.smash(prop, { x: lx, y: ly, owner: atk.owner }, depth + 1);
         } else {
-          this.landedProps.push({ kind: 'fork', x: lx, y: ly, rot: ang });
+          this.landedProps.push({ kind: 'fork', x: lx, y: ly, rot });
         }
       });
     }
@@ -723,16 +951,9 @@ class Game {
     food.state = 'smashed';
     food.stateT = 0;
     this.burst(food.x, food.y, 18, food.color, 160, 3, 0.6, 600);
-    // The dish lands on the nearest head, as a hat.
-    let best = null;
-    let bd = Infinity;
-    for (const h of this.table.humans) {
-      const d = Math.hypot(h.x - food.x, h.y - food.y);
-      if (d < bd) {
-        bd = d;
-        best = h;
-      }
-    }
+    // The dish lands on a head, as a hat — the one nearest its
+    // escape line away from the impact (P1-1).
+    const best = this.foodHatVictim(food, atk);
     if (best) {
       const victim = best;
       this.flyProjectile(kind === 'greens' ? 'greens' : 'chicken', food.x, food.y, victim.x, victim.y - 20, () => {
@@ -832,6 +1053,7 @@ class Game {
       if (fly.landedOn && (!zone || fly.landedOn !== zone || fly.speed > FLY.landSpeed * 1.6)) {
         fly.landedOn = null;
         this.tauntClock = 0;
+        this.bet = 0; // drifting off spends nothing — the bet dies (P1-4)
       }
     }
 
@@ -880,9 +1102,11 @@ class Game {
   }
 
   comboLogic(dt) {
-    // Decay (spec 2.4): 4s without a Good+ dodge, then -1 per 0.8s.
+    // Decay (spec 2.4): the fuse runs to decayDeadline — 4s after
+    // the last Good+ dodge, pushed later by every crumb eaten
+    // (P1-2) — then -1 per 0.8s.
     if (this.combo <= 0) return;
-    if (this.clock - this.lastGoodClock <= COMBO.decayAfter) {
+    if (this.clock <= this.decayDeadline) {
       this.decayAcc = 0;
       return;
     }
@@ -1193,6 +1417,10 @@ class Game {
   // --- ambient systems ----------------------------------------------------------
 
   stepFx(dt) {
+    if (this.missBar) {
+      this.missBar.t += dt;
+      if (this.missBar.t > this.missBar.dur) this.missBar = null;
+    }
     for (const p of this.particles) {
       p.life -= dt;
       p.x += p.vx * dt;
@@ -1258,12 +1486,27 @@ if (shotName) {
   }
 } else {
   game.state = 'title';
+  // P0-4: losing the tab mid-run pauses the party — nobody should
+  // come back from a review tab to a fly already flat.
+  const loseFocus = () => {
+    if (game.state === 'playing') game.focusPaused = true;
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) loseFocus();
+  });
+  window.addEventListener('blur', loseFocus);
   let last = performance.now();
   let acc = 0;
   const frame = (now) => {
     const delta = Math.min(0.1, (now - last) / 1000);
     last = now;
 
+    if (game.focusPaused) {
+      if (input.takeClick() || input.take('Space') || input.take('Enter')) game.focusPaused = false;
+      game.draw(delta);
+      requestAnimationFrame(frame);
+      return;
+    }
     if (input.take('KeyP') && game.state === 'playing') game.paused = !game.paused;
     let flashPressed = false;
     const resultsReady = game.state === 'results' && game.time - game.finishTime > 0.8;
@@ -1275,8 +1518,13 @@ if (shotName) {
       game.newRun(runSeed);
       game.sound.unlock();
       game.start();
-    } else if (game.state === 'playing' && (input.take('Space') || input.takeClick())) {
-      flashPressed = true;
+    } else if (game.state === 'playing') {
+      if (input.take('Space')) flashPressed = true;
+      if (input.takeClick()) {
+        // Landed clicks raise the bet (P1-4); airborne clicks dodge.
+        if (game.tutorial === 'done' && game.fly.landedOn) game.placeBet();
+        else flashPressed = true;
+      }
     }
     // During the scripted opening, ANY key or click is the dodge.
     if (game.state === 'playing' && game.tutorial !== 'done' && (input.take('Enter') || input.take('KeyR'))) {

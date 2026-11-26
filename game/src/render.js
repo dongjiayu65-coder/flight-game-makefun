@@ -7,6 +7,7 @@
 // ring so it can never get lost on a busy table.
 
 import { PALETTE, VIEW } from './config.js';
+import { warnProgress, grandpaStalled } from './humans.js';
 
 const TAU = Math.PI * 2;
 const OUTLINE = PALETTE.ink;
@@ -88,14 +89,17 @@ export class Renderer {
 
     this.drawRoom(game, t);
     this.drawTable(game, t);
+    this.drawCrumbs(game, t);
     this.drawHover(game, t);
     this.drawHumans(game, t);
     this.drawLamp(game, t);
     this.drawDog(game, t);
+    this.drawChainPreview(game, t);
     this.drawAttacks(game, t);
     this.drawFly(game, t);
     this.drawParticles(game);
     this.drawTexts(game);
+    this.drawMissBar(game);
 
     if (game.blackoutT > 0) this.drawBlackout(game, t);
     if (game.showKeycap && game.state === 'playing') this.drawKeycap(game, t);
@@ -110,6 +114,24 @@ export class Renderer {
     if (game.redFlashT > 0) {
       ctx.fillStyle = `rgba(255,45,45,${Math.min(0.32, game.redFlashT * 1.1)})`;
       ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+    }
+    // The focus-pause veil (P0-4) sits above even the flashes.
+    if (game.focusPaused) {
+      ctx.fillStyle = 'rgba(11,6,18,0.72)';
+      ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '800 46px "Baloo 2","Trebuchet MS",sans-serif';
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = OUTLINE;
+      ctx.strokeText('PAUSED', VIEW.width / 2, VIEW.height / 2 - 28);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText('PAUSED', VIEW.width / 2, VIEW.height / 2 - 28);
+      ctx.font = '700 25px "Baloo 2","Trebuchet MS",sans-serif';
+      ctx.lineWidth = 6;
+      ctx.strokeText('Click to resume', VIEW.width / 2, VIEW.height / 2 + 32);
+      ctx.fillStyle = PALETTE.butter;
+      ctx.fillText('Click to resume', VIEW.width / 2, VIEW.height / 2 + 32);
     }
   }
 
@@ -478,6 +500,166 @@ export class Renderer {
   }
 
   // --- hover / landing telegraphs -----------------------------------------
+
+  // Harvestable crumbs (P1-2): little morsels with a soft pulse,
+  // fading out in their last 0.6s on the cloth.
+  drawCrumbs(game, t) {
+    const ctx = this.ctx;
+    for (const c of game.crumbs) {
+      const fade = c.t > c.life - 0.6 ? Math.max(0, (c.life - c.t) / 0.6) : 1;
+      const bob = Math.sin(t * 5 + c.phase) * 1.1;
+      const r = c.size * (1 + Math.sin(t * 6 + c.phase) * 0.12);
+      ctx.globalAlpha = fade;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y + bob, r, 0, TAU);
+      ctx.fillStyle = c.color;
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = OUTLINE;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Chain preview (P1-1): whatever the dragged warning currently
+  // covers wears its event badge, and derivations with a knowable
+  // target get a dashed arrow — the same helpers the game resolves
+  // with, so the preview never lies.
+  drawChainPreview(game, t) {
+    const ctx = this.ctx;
+    const GLYPH = { soup: '≈', head: '!', fork: 'Ψ', knife: 'Ψ', cup: '∪', teacup: '∪', cake: '★', greens: '↑', chicken: '↑', dog: '●' };
+    for (const atk of game.director.attacks) {
+      if (atk.state !== 'warning' || atk.idle || atk.finale) continue;
+      if (atk.kind !== 'palm' && atk.kind !== 'poke') continue;
+      const prop = game.table.propAt(atk.x, atk.y);
+      if (!prop) continue;
+      let to = null;
+      if (prop.kind === 'soup') {
+        const v = game.splashVictim(prop.ref, atk);
+        if (v) to = { x: v.x, y: v.y };
+      } else if (prop.kind === 'head') {
+        const idx = game.table.humans.indexOf(prop.ref);
+        const n = game.table.humans[(idx + 1) % game.table.humans.length];
+        to = { x: n.x, y: n.y };
+      } else if (prop.kind === 'fork' || prop.kind === 'knife') {
+        to = game.cutleryLanding(prop.ref, atk);
+      } else if (prop.kind === 'greens' || prop.kind === 'chicken') {
+        const v = game.foodHatVictim(prop.ref, atk);
+        if (v) to = { x: v.x, y: v.y };
+      }
+      if (to) {
+        const dx = to.x - prop.x;
+        const dy = to.y - prop.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const sx = prop.x + (dx / len) * ((prop.r ?? 26) + 18);
+        const sy = prop.y + (dy / len) * ((prop.r ?? 26) + 18);
+        const ex = to.x - (dx / len) * 16;
+        const ey = to.y - (dy / len) * 16;
+        ctx.strokeStyle = 'rgba(255,63,164,0.8)';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([7, 6]);
+        ctx.lineDashOffset = -t * 26;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const ang = Math.atan2(ey - sy, ex - sx);
+        ctx.fillStyle = 'rgba(255,63,164,0.9)';
+        ctx.beginPath();
+        ctx.moveTo(ex, ey);
+        ctx.lineTo(ex - Math.cos(ang - 0.42) * 12, ey - Math.sin(ang - 0.42) * 12);
+        ctx.lineTo(ex - Math.cos(ang + 0.42) * 12, ey - Math.sin(ang + 0.42) * 12);
+        ctx.closePath();
+        ctx.fill();
+      }
+      const bx = prop.x;
+      const by = prop.y - (prop.r ?? 26) - 18;
+      const pulse = 1 + Math.sin(t * 6) * 0.08;
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.scale(pulse, pulse);
+      ctx.beginPath();
+      ctx.arc(0, 0, 13, 0, TAU);
+      ctx.fillStyle = 'rgba(255,63,164,0.95)';
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = OUTLINE;
+      ctx.stroke();
+      ctx.font = '800 15px "Baloo 2","Trebuchet MS",sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(GLYPH[prop.kind] ?? '✸', 0, 1);
+      ctx.restore();
+    }
+  }
+
+  // The replay bar (P0-3): a -600..+300ms axis around the impact,
+  // the PERFECT zone in magenta, and where the player's press fell.
+  drawMissBar(game) {
+    const bar = game.missBar;
+    if (!bar || game.state !== 'playing') return;
+    const ctx = this.ctx;
+    const w = 460;
+    const x0 = VIEW.width / 2 - w / 2;
+    const y = 262;
+    const px = (ms) => x0 + ((ms + 600) / 900) * w;
+    const alpha = bar.t < 0.1 ? bar.t / 0.1 : bar.t > bar.dur - 0.25 ? Math.max(0, (bar.dur - bar.t) / 0.25) : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(26,13,32,0.85)';
+    roundRect(ctx, x0 - 20, y - 46, w + 40, 92, 12);
+    ctx.fill();
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = OUTLINE;
+    ctx.stroke();
+    // Track, PERFECT zone, impact line.
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    roundRect(ctx, x0, y - 6, w, 12, 6);
+    ctx.fill();
+    ctx.fillStyle = PALETTE.magenta;
+    roundRect(ctx, px(-70), y - 6, px(0) - px(-70), 12, 6);
+    ctx.fill();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(px(0), y - 15);
+    ctx.lineTo(px(0), y + 15);
+    ctx.stroke();
+    ctx.font = '700 11px "Baloo 2","Trebuchet MS",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = PALETTE.magenta;
+    ctx.fillText('PERFECT', px(-35), y + 12);
+    // The press marker (before impact) and the late marker (after).
+    if (bar.pressRemainMs != null) {
+      ctx.strokeStyle = '#7FE7FF';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(px(-bar.pressRemainMs), y - 13);
+      ctx.lineTo(px(-bar.pressRemainMs), y + 13);
+      ctx.stroke();
+    }
+    if (bar.lateMs != null) {
+      ctx.strokeStyle = '#FF5A4E';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(px(bar.lateMs), y - 13);
+      ctx.lineTo(px(bar.lateMs), y + 13);
+      ctx.stroke();
+    }
+    ctx.font = '800 22px "Baloo 2","Trebuchet MS",sans-serif';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = '#FFFFFF';
+    const label = bar.lateMs != null
+      ? `+${bar.lateMs}ms late`
+      : bar.pressRemainMs != null
+        ? `Pressed with ${bar.pressRemainMs}ms left — still caught`
+        : 'No dodge';
+    ctx.fillText(label, VIEW.width / 2, y - 14);
+    ctx.restore();
+  }
 
   drawHover(game, t) {
     const ctx = this.ctx;
@@ -920,22 +1102,63 @@ export class Renderer {
       ctx.restore();
       return;
     }
-    // The shrinking ring: 90 -> impact radius, tomato -> white,
-    // magenta strobe for the final 200ms (spec 2.2).
-    const k = atk.dur > 0 ? atk.t / atk.dur : 1;
+    // The shrinking ring. Its pace is the attacker's personality
+    // (P1-3): warnProgress bends t into the ring's own clock, so a
+    // ring that stalls is genuinely still coming, just slowly.
+    // While the hand is still hunting (P0-1) the ring runs as
+    // marching ants; once it locks, the ring goes solid and grows
+    // its teeth.
+    const k = warnProgress(atk);
     const warnFrom = atk.warnFrom ?? 110;
     const r = warnFrom + (atk.radius - warnFrom) * k;
-    let color = `rgba(255,${Math.round(90 + 165 * k)},${Math.round(78 + 177 * k)},${0.35 + 0.25 * k})`;
+    let jx = atk.x;
+    let jy = atk.y;
+    if (atk.personality === 'timmy') {
+      jx += Math.sin(t * 31) * 1.8;
+      jy += Math.cos(t * 27) * 1.8;
+    } else if (atk.personality === 'grandpa' && grandpaStalled(atk)) {
+      jx += Math.sin(t * 47) * 2.6;
+      jy += Math.cos(t * 53) * 2.2;
+    }
+    let color;
+    if (atk.personality === 'mom') {
+      // Mom deepens tomato -> crimson as the ring tightens.
+      color = `rgba(255,${Math.round(90 - 62 * k)},${Math.round(78 - 42 * k)},${0.35 + 0.25 * k})`;
+    } else {
+      color = `rgba(255,${Math.round(90 + 165 * k)},${Math.round(78 + 177 * k)},${0.35 + 0.25 * k})`;
+    }
     if (remainMs < 200 && Math.floor(t * 20) % 2 === 0) color = 'rgba(255,63,164,0.9)';
+    const lockedVis = atk.locked || atk.finale;
     ctx.fillStyle = color.replace(/[\d.]+\)$/, `${0.10 + 0.12 * k})`);
     ctx.beginPath();
-    ctx.arc(atk.x, atk.y, r, 0, TAU);
+    ctx.arc(jx, jy, r, 0, TAU);
     ctx.fill();
     ctx.strokeStyle = color;
-    ctx.lineWidth = atk.finale ? 5 : 3.5;
+    ctx.lineWidth = (atk.finale ? 5 : 3.5) + (lockedVis ? 1.5 : 0);
+    ctx.setLineDash(lockedVis ? [] : [12, 9]);
+    ctx.lineDashOffset = -t * 36;
     ctx.beginPath();
-    ctx.arc(atk.x, atk.y, r, 0, TAU);
+    ctx.arc(jx, jy, r, 0, TAU);
     ctx.stroke();
+    ctx.setLineDash([]);
+    if (lockedVis && !atk.finale) {
+      // Lock ticks: four teeth on the ring's compass points.
+      ctx.lineWidth = 3;
+      for (const a of [0, Math.PI / 2, Math.PI, (Math.PI * 3) / 2]) {
+        ctx.beginPath();
+        ctx.moveTo(jx + Math.cos(a) * (r + 2), jy + Math.sin(a) * (r + 2));
+        ctx.lineTo(jx + Math.cos(a) * (r + 9), jy + Math.sin(a) * (r + 9));
+        ctx.stroke();
+      }
+    }
+    if (atk.personality === 'grandpa') {
+      // Grandpa's shaky second ring, always trailing the real one.
+      ctx.strokeStyle = color.replace(/[\d.]+\)$/, '0.45)');
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(jx, jy, r + 8, 0, TAU);
+      ctx.stroke();
+    }
     if (atk.finale) {
       ctx.strokeStyle = 'rgba(255,201,74,0.8)';
       ctx.lineWidth = 2.5;
@@ -943,11 +1166,12 @@ export class Renderer {
       ctx.arc(atk.x, atk.y, r + 12 + Math.sin(t * 8) * 3, 0, TAU);
       ctx.stroke();
     }
-    // The shadow of the coming hand grows over the target.
+    // The shadow of the coming hand grows over the target — drawn
+    // at the (possibly jittered) ring centre so the two never split.
     const shadowK = 0.4 + 0.6 * k;
     ctx.fillStyle = `rgba(20,8,24,${0.10 + 0.16 * k})`;
     ctx.beginPath();
-    ctx.ellipse(atk.x, atk.y, atk.radius * 1.15 * shadowK + 12, atk.radius * 0.8 * shadowK + 9, 0, 0, TAU);
+    ctx.ellipse(jx, jy, atk.radius * 1.15 * shadowK + 12, atk.radius * 0.8 * shadowK + 9, 0, 0, TAU);
     ctx.fill();
   }
 
@@ -1078,6 +1302,15 @@ export class Renderer {
     ctx.beginPath();
     ctx.ellipse(fly.x, fly.y + 13, 13, 5, 0, 0, TAU);
     ctx.fill();
+    // Raised-bet pips ride above the fly (P1-4): one dot per level.
+    if (game.bet > 0 && fly.squashT <= 0) {
+      for (let i = 0; i < game.bet; i++) {
+        const bx = fly.x - (game.bet - 1) * 8 + i * 16;
+        const by = fly.y - 30 + Math.sin(t * 7 + i * 1.3) * 2;
+        circle(ctx, bx, by, 5.5, PALETTE.magenta, false);
+        circle(ctx, bx, by, 2.2, '#FFFFFF', false);
+      }
+    }
     // The white locator ring + flash-cooldown sweep (spec 1.2/3.2).
     ctx.strokeStyle = 'rgba(255,255,255,0.6)';
     ctx.lineWidth = 2.5;

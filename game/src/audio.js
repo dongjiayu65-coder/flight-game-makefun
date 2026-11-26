@@ -94,12 +94,14 @@ export class Sound {
     }
   }
 
-  update(dt, { playing = false, flySpeed = 0, landed = false, warnMs = null } = {}) {
+  update(dt, { playing = false, flySpeed = 0, landed = false, warnMs = null, bet = 0 } = {}) {
     if (!this.ctx) return;
     if (playing) this.buzz(true);
     if (this.buzzOsc && this.buzzGain) {
-      // Spec 3.2: f = 180 + speed * 0.45, capped at 420Hz.
-      const freq = Math.min(420, 180 + (Number.isFinite(flySpeed) ? flySpeed : 0) * 0.45);
+      // Spec 3.2: f = 180 + speed * 0.45, capped at 420Hz. A raised
+      // bet (v3 P1-4) pitches the landed buzz up — greed sounds keen.
+      let freq = Math.min(420, 180 + (Number.isFinite(flySpeed) ? flySpeed : 0) * 0.45);
+      if (landed && bet > 0) freq = Math.min(460, freq * (1 + bet * 0.15));
       this.buzzOsc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.03);
       const vol = playing ? (landed ? 0.016 : 0.03) : 0.0;
       this.buzzGain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.06);
@@ -129,6 +131,10 @@ export class Sound {
   // --- one-shots ---------------------------------------------------------
 
   warn() { this.tone(660, 0.08, { type: 'square', vol: 0.1 }); }
+  lock() { this.tone(190, 0.05, { type: 'square', vol: 0.13 }); this.noise(0.04, { vol: 0.1, freq: 2400, q: 1.2 }); }
+  bet(level) { this.tone(440 + level * 140, 0.08, { type: 'triangle', vol: 0.13, slide: 160 }); }
+  crumb() { this.tone(980, 0.05, { type: 'sine', vol: 0.05, slide: 220 }); }
+  lucky() { this.tone(520, 0.09, { type: 'triangle', vol: 0.13 }); this.tone(780, 0.12, { type: 'triangle', vol: 0.13, delay: 0.07 }); }
   sprayWarn() { this.noise(0.35, { vol: 0.1, freq: 3200, q: 0.4 }); }
   land() { this.tone(240, 0.05, { type: 'triangle', vol: 0.08 }); }
   pop() { this.tone(520, 0.06, { type: 'sine', vol: 0.14, slide: 260 }); }
