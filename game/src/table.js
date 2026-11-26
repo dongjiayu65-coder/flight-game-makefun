@@ -85,7 +85,8 @@ export class Table {
     );
 
     // The family (spec 1.4). Big sticker heads at the table edges,
-    // seated on the painted chairs (ROOM.seats, measured off F1b).
+    // seated on the painted chairs (ROOM.seats, measured off the
+    // layers19 background plate).
     const cx = t.x + t.w / 2;
     const cy = t.y + t.h / 2;
     const seats = [

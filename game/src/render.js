@@ -140,21 +140,20 @@ export class Renderer {
 
   drawRoom(game, t) {
     const ctx = this.ctx;
-    // The painted room (F1b): floor, rug, chairs and the empty
-    // table itself are one picture now. The light pool and the
-    // vignette stay code — they move and darken with the game.
+    // The painted room (the layers19 plate): floor, chairs and
+    // the empty table are one picture, warm light and corner
+    // falloff baked in. The code light pool survives only as a
+    // whisper (0.07, was 0.20 over F1b) — just enough for the
+    // lamp-swing sway to read — and the code vignette is gone:
+    // the plate's corners already sit at ~lum 45 against the
+    // cloth's 220, so stacking it would double-darken.
     if (drawBgImage(ctx)) {
       const lamp = game.table.lamp;
       const sway = game.table.lampSwingT > 0 ? Math.sin(t * 9) * 16 * (game.table.lampSwingT / 3) : 0;
       const pool = ctx.createRadialGradient(lamp.x + sway, lamp.y, 60, lamp.x + sway, lamp.y, 520);
-      pool.addColorStop(0, 'rgba(255,205,110,0.20)');
+      pool.addColorStop(0, 'rgba(255,205,110,0.07)');
       pool.addColorStop(1, 'rgba(255,205,110,0)');
       ctx.fillStyle = pool;
-      ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-      const vg = ctx.createRadialGradient(640, 400, 380, 640, 400, 900);
-      vg.addColorStop(0, 'rgba(11,6,18,0)');
-      vg.addColorStop(1, 'rgba(11,6,18,0.5)');
-      ctx.fillStyle = vg;
       ctx.fillRect(0, 0, VIEW.width, VIEW.height);
       return;
     }
@@ -207,7 +206,7 @@ export class Renderer {
     const painted = bgReady();
     if (!painted) {
       // Wooden rim, then the cream checked cloth (code fallback
-      // while the painting loads; F1b has both baked in).
+      // while the painting loads; the plate has both baked in).
       ctx.fillStyle = PALETTE.wood;
       roundRect(ctx, r.x - 14, r.y - 14, r.w + 28, r.h + 28, 18);
       ctx.fill();

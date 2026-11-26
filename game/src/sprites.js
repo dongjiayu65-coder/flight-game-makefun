@@ -1,9 +1,10 @@
 // sprites.js — the v3 art pass: the AI-painted sprite sheets
 // (S1-S5) cut into an atlas by tools/cut-sprites.py, plus the
-// painted empty-table background (F1b). Everything here is a
-// drop-in visual replacement: until an image has loaded, callers
-// fall back to the original code-drawn art, so the game never
-// waits on the network and never draws a hole.
+// painted room background (since v4: the layers19 plate split
+// out of the F1 scene). Everything here is a drop-in visual
+// replacement: until an image has loaded, callers fall back to
+// the original code-drawn art, so the game never waits on the
+// network and never draws a hole.
 
 import { ATLAS } from './atlas-data.js';
 
@@ -38,10 +39,10 @@ export function onSpritesReady(fn) {
   else readyCbs.push(fn);
 }
 
-// The background transform: F1b (1536x1024) scaled to the stage
-// width and centred vertically. ROOM.table in config.js is the
-// cloth rectangle this transform produces — measured off the
-// painting, not the other way round.
+// The background transform: the plate (1536x1024) scaled to the
+// stage width and centred vertically. ROOM.table in config.js
+// is the cloth rectangle this transform produces — measured off
+// the painting, not the other way round.
 export const BG = { scale: 1280 / 1536, dy: (800 - (1024 * 1280) / 1536) / 2 };
 
 export function drawBgImage(ctx) {

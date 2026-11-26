@@ -10,20 +10,33 @@ export const VIEW = {
   height: 800,
 };
 
-// The room geometry is measured off the painted background (F1b):
-// the cloth rectangle and the four chairs in the painting are
-// where the game now agrees they are (v3 art pass). BG transform
-// in sprites.js: scale 1280/1536, vertical centre.
+// The room geometry is measured off the painted background —
+// since the v4 pass that is the layers19 background plate 董
+// split out of the F1 scene painting (empty table, four chairs,
+// the warm light baked in). The cloth rectangle and the chairs
+// in the painting are where the game agrees they are. BG
+// transform in sprites.js: scale 1280/1536, vertical centre;
+// the numbers below are that transform applied to measurements
+// taken on the 1536x1024 plate (tools/measure-bg.py).
 export const ROOM = {
-  table: { x: 212, y: 172, w: 860, h: 526, r: 40 },
+  // Cloth bbox on the plate: x 247..1285, y 238..867.
+  table: { x: 206, y: 172, w: 865, h: 524, r: 40 },
+  // The plate's glow centres on the cloth at plate (771,536),
+  // which sits behind Mom's chair — so the code-drawn fixture
+  // keeps its F1b offset, hanging just right of her head, clear
+  // of it by the same margin as before.
   lamp: { x: 700, y: 88 },
   // Head centres on the painting's chairs: Mom north, Grandpa
   // west, Timmy east, Dad south (the order table.js seats them).
+  // Each is its chair's centre pulled toward the table: Mom
+  // plate (744,155), Grandpa (182,498), Timmy (1354,498), Dad
+  // (761,932) — Dad now sits centred on his chair (in the F1b
+  // framing he floated ~125px right of it).
   seats: [
-    { x: 620, y: 106 },
-    { x: 146, y: 389 },
-    { x: 1138, y: 389 },
-    { x: 760, y: 744 },
+    { x: 620, y: 103 },
+    { x: 152, y: 388 },
+    { x: 1128, y: 388 },
+    { x: 634, y: 750 },
   ],
 };
 
