@@ -109,6 +109,7 @@ export class Table {
       cooldownT: 0, // personal slap cooldown (spec 2.2)
       blockedT: 0, // cannot slap at all (standing in soup, posing…)
       angryT: 0,
+      annoyCount: 0, // times wronged this run (v5: repeats fester longer)
       stateT: 0,
       // Accumulated ruin (the results photo reads these).
       soupFace: false,

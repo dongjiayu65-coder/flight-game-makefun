@@ -31,12 +31,17 @@ export const ROOM = {
   // Each is its chair's centre pulled toward the table: Mom
   // plate (744,155), Grandpa (182,498), Timmy (1354,498), Dad
   // (761,932) — Dad now sits centred on his chair (in the F1b
-  // framing he floated ~125px right of it).
+  // framing he floated ~125px right of it). v5: Dad pulled a
+  // further 34px toward the table centre — at 750 the painted
+  // head + shoulders (drawn 15% up since v5) ran off the bottom
+  // of the 800px stage, and the old bottom-centre RUINED meter
+  // sat on his face; 716 keeps all of him in frame, leaning
+  // over the cloth like the painting's south seat does.
   seats: [
     { x: 620, y: 103 },
     { x: 152, y: 388 },
     { x: 1128, y: 388 },
-    { x: 634, y: 750 },
+    { x: 634, y: 716 },
   ],
 };
 

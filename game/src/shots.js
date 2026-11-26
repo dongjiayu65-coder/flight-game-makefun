@@ -176,8 +176,12 @@ export function applyPose(game, name) {
     dad.expression = 'slapped';
     dad.exprT = 9;
     dad.palmPrint = true;
+    // At 35% ruined the bystanders sit at the suspicious tier
+    // (v5 mood rule) — posed explicitly, shots are frozen draws.
+    grandpa.expression = 'suspicious';
+    timmy.expression = 'suspicious';
     mom.soupFace = true;
-    mom.expression = 'scared';
+    mom.expression = 'angry'; // v5: souped = furious, never scared-smiling
     mom.exprT = 9;
     game.dog = { x: chicken.x - 130, y: chicken.y + 36, state: 'idle', t: 9, dirX: 1, checkT: 0 };
     fly.x = greens.x + 92;
@@ -187,6 +191,43 @@ export function applyPose(game, name) {
     game.combo = 6; // golden fly
     game.score = 12400;
     game.chaosTotal = 2100;
+    return;
+  }
+
+  if (name === 'opening') {
+    // v5: the untouched table at the top of a run — all four
+    // seats in frame, the RUINED meter parked top-left.
+    play(2);
+    fly.x = 640;
+    fly.y = 420;
+    fly.vx = 0;
+    fly.vy = 0;
+    return;
+  }
+  if (name === 'mood') {
+    // v5: the room's mood at 45% ruined — the default face has
+    // soured to suspicious, and Dad (wronged twice) is already
+    // at the angry tier the provocation rule keeps him on.
+    play(58);
+    game.chaosTotal = 2700; // 45%: suspicious default tier
+    game.score = 9800;
+    soup.state = 'empty';
+    greens.state = 'smashed';
+    game.stains.push(
+      { kind: 'stain-soup', x: soup.x + 30, y: soup.y + 48, rot: 0.7, w: 118 },
+      { kind: 'stain-cream', x: cake.x - 64, y: cake.y + 40, rot: 2.1, w: 104 },
+    );
+    dad.expression = 'angry';
+    dad.angryT = 9;
+    dad.annoyCount = 2;
+    mom.expression = 'suspicious';
+    grandpa.expression = 'suspicious';
+    timmy.expression = 'suspicious';
+    fly.x = cake.x - 120;
+    fly.y = cake.y - 70;
+    fly.vx = 0;
+    fly.vy = 0;
+    game.combo = 4;
     return;
   }
 

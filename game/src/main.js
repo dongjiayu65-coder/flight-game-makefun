@@ -699,7 +699,7 @@ class Game {
   }
 
   quipAt(human, text) {
-    this.floatText(human.x, human.y - 62, text, '#ffffff', 22, { bubble: true });
+    this.floatText(human.x, human.y - 78, text, '#ffffff', 22, { bubble: true });
   }
 
   // --- directional chain geometry (v3 P1-1) -------------------------
@@ -783,6 +783,14 @@ class Game {
   smash(target, atk, depth) {
     const { x, y } = atk;
     this.addStain(x, y, target.kind);
+    // A dish wrecked right in front of someone is a wrong done to
+    // them personally (v5): the nearest face takes offence. The
+    // soup has its own victim geometry inside eventSoup, and a
+    // head is provoked directly in eventHead.
+    if (target.kind === 'greens' || target.kind === 'chicken' || target.kind === 'cake') {
+      const near = this.director.nearestHuman(target.x, target.y);
+      if (near) this.provoke(near);
+    }
     switch (target.kind) {
       case 'head': return this.eventHead(target.ref, atk, depth);
       case 'soup': return this.eventSoup(target.ref, atk, depth);
@@ -801,6 +809,10 @@ class Game {
           target.ref.stateT = 0;
           this.addChaos(40, depth, x, y);
           this.burst(x, y, 12, '#f0ead8', 130, 2.6, 0.5, 600);
+          // Tableware smashed in front of someone (v5): the
+          // nearest face takes offence at the wreckage too.
+          const near = this.director.nearestHuman(target.ref.x, target.ref.y);
+          if (near) this.provoke(near);
         }
       }
     }
@@ -812,7 +824,7 @@ class Game {
     h.palmPrint = true;
     h.expression = 'slapped';
     h.exprT = 1.2;
-    h.angryT = 3;
+    this.provoke(h);
     h.stateT = 0;
     this.events.palmPrint = true;
     this.burst(h.x, h.y, 10, 'rgba(240,180,120,0.9)', 90, 2.4, 0.4, 300);
@@ -839,7 +851,7 @@ class Game {
       const neighbour = this.table.humans[(idx + 1) % this.table.humans.length];
       this.queueEvent(0.3, () => {
         if (this.state !== 'playing') return;
-        neighbour.angryT = 3;
+        this.provoke(neighbour);
         this.brawlCount++;
         if (this.brawlCount >= 3) this.unlock('familyBrawl');
         this.quipAt(neighbour, this.copy.quipFor('brawl'));
@@ -886,9 +898,13 @@ class Game {
     if (best) {
       best.soupFace = true;
       best.blockedT = Math.max(best.blockedT, 3); // standing, dripping, useless
-      best.expression = 'scared';
-      best.exprT = 1.4;
+      // A face full of soup is furious, not startled (v5): the
+      // decal alone used to land here while the expression
+      // machine never heard about it, so Mom wore the soup over
+      // a smile. Angry at once, and it festers via provoke().
+      best.expression = 'angry';
       best.stateT = 0;
+      this.provoke(best);
       this.events.soupFace = true;
       this.quipAt(best, this.copy.quipFor('soup', best.name));
       if (best.name === 'Mom') this.unlock('soupBun');
@@ -979,6 +995,9 @@ class Game {
       this.flyProjectile(kind === 'greens' ? 'greens' : 'chicken', food.x, food.y, victim.x, victim.y - 20, () => {
         victim.hatKind = kind;
         victim.stateT = 0;
+        // Wearing dinner is a wrong in person (v5), quite apart
+        // from the coin-flip brawl derivation below.
+        this.provoke(victim);
         this.quipAt(victim, this.copy.quipFor(kind === 'greens' ? 'foodHat' : 'chickenHat'));
         // Derivation (50%): wearing dinner counts as being slapped.
         if (this.rng() < 0.5) this.queueEvent(0.3, () => this.eventHead(victim, atk, depth + 1));
@@ -1334,8 +1353,8 @@ class Game {
           this.events.soupFace = true;
           timmy.soupFace = true;
           timmy.blockedT = 3;
-          timmy.expression = 'scared';
-          timmy.exprT = 1.4;
+          timmy.expression = 'angry';
+          this.provoke(timmy);
           this.quipAt(timmy, this.copy.quipFor('soup', 'Timmy'));
           soup.state = 'empty';
           soup.stateT = 0;
@@ -1384,6 +1403,22 @@ class Game {
     return 1;
   }
 
+  // Being wronged, in person (v5): slapped, souped, dinner worn
+  // as a hat, or the dish in front of you wrecked. The face goes
+  // angry and STAYS angry — at least 4 seconds for a first
+  // offence, 8 once the same person has been wronged twice.
+  // angryT ticks down even while a set-piece expression holds
+  // (exprT), so the set-piece's remaining time is banked on top:
+  // once the scare/slap beat lets go, the full angry duration is
+  // still there to be displayed. 董's playtest caught a
+  // soup-faced Mom still smiling because the decal layer never
+  // talked to the expression machine — this is that conversation.
+  provoke(h) {
+    h.annoyCount = (h.annoyCount ?? 0) + 1;
+    const dur = h.annoyCount >= 2 ? 8 : 4;
+    h.angryT = Math.max(h.angryT, dur + Math.max(0, h.exprT));
+  }
+
   expressionLogic() {
     const destruction = this.destruction01;
     for (const h of this.table.humans) {
@@ -1391,8 +1426,12 @@ class Game {
       if (this.photoT > 0) h.expression = 'happy';
       else if (h.angryT > 0) h.expression = 'angry';
       else if (this.director.attacks.some((a) => a.state === 'warning' && a.owner === h)) h.expression = 'angry';
-      else if (destruction >= 0.6) h.expression = 'angry';
-      else if (destruction >= 0.3) h.expression = 'suspicious';
+      // The room's mood sours with the wreckage (v5 thresholds):
+      // a quarter ruined and nobody's smiling along, half ruined
+      // and the default face is fury. A lapsed provocation falls
+      // back to THIS, never straight to happy.
+      else if (destruction >= 0.5) h.expression = 'angry';
+      else if (destruction >= 0.25) h.expression = 'suspicious';
       else h.expression = 'happy';
     }
   }

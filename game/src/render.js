@@ -13,6 +13,13 @@ import { spritesReady, bgReady, drawBgImage, drawSprite, drawHead, drawPalm } fr
 const TAU = Math.PI * 2;
 const OUTLINE = PALETTE.ink;
 
+// v5: the family DRAWN 15% larger than their taunt radius — the
+// F1 painting's people carry more of the frame than headR=48
+// stickers did. Purely cosmetic: drawHuman scales its local
+// context, so every radius, zone and rating in the game logic
+// keeps using headR untouched.
+const HEAD_DRAW = 1.15;
+
 function circle(ctx, x, y, r, fill, outline = true) {
   ctx.beginPath();
   ctx.arc(x, y, r, 0, TAU);
@@ -844,6 +851,7 @@ export class Renderer {
     const bob = Math.sin(t * 1.6 + idx * 1.9) * 2;
     ctx.save();
     ctx.translate(x, y + bob);
+    ctx.scale(HEAD_DRAW, HEAD_DRAW); // v5: presence only — see HEAD_DRAW
     // Shoulders in the shirt colour, tucked behind the head.
     ctx.fillStyle = h.look.clothes;
     ctx.beginPath();

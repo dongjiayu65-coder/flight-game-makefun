@@ -144,21 +144,22 @@ export class Hud {
       }
       ctx.restore();
     }
-    // Party Ruined meter, bottom-centre.
+    // Party Ruined meter, top-left under the hearts (v5: the
+    // bottom-centre spot sat squarely on Dad's head).
     const dk = this.slideK(game, 0.45);
     if (dk > 0) {
       ctx.save();
-      ctx.translate(0, 52 * (1 - dk));
-      const w = 420;
-      const x = VIEW.width / 2 - w / 2;
-      const y = VIEW.height - 40;
-      ctx.font = `800 16px ${FONT}`;
-      ctx.textAlign = 'center';
+      ctx.translate(0, -46 * (1 - dk));
+      const w = 240;
+      const x = 30;
+      const y = 94;
+      ctx.font = `800 14px ${FONT}`;
+      ctx.textAlign = 'left';
       ctx.lineWidth = 4;
       ctx.strokeStyle = OUTLINE;
-      ctx.strokeText('PARTY RUINED', VIEW.width / 2, y - 8);
+      ctx.strokeText('PARTY RUINED', x, y - 8);
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText('PARTY RUINED', VIEW.width / 2, y - 8);
+      ctx.fillText('PARTY RUINED', x, y - 8);
       ctx.fillStyle = 'rgba(43,27,46,0.6)';
       roundRect(ctx, x - 4, y + 2, w + 8, 16, 8);
       ctx.fill();
@@ -170,7 +171,7 @@ export class Hud {
       }
       ctx.font = `800 15px ${FONT}`;
       ctx.fillStyle = PALETTE.butter;
-      ctx.fillText(`${Math.round(game.destruction01 * 100)}%`, VIEW.width / 2 - w / 2 - 30, y + 14);
+      ctx.fillText(`${Math.round(game.destruction01 * 100)}%`, x + w + 14, y + 14);
       ctx.restore();
     }
     // The combo rides on the fly (spec 1.4), magenta and growing.

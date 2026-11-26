@@ -1,6 +1,7 @@
 /* style.css — the page around the canvas: a dark warm backdrop so the
    lit dinner table floats in the middle, the canvas scaled to fit
-   while keeping its 1280×800 shape, and one line of controls below. */
+   the WHOLE stage inside the viewport (whichever dimension is the
+   tight one), and one line of controls below. */
 
 * { box-sizing: border-box; }
 
@@ -14,6 +15,7 @@ html, body {
 
 main {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -23,7 +25,13 @@ main {
 }
 
 canvas#game {
-  width: min(1280px, 97vw);
+  /* Fit by BOTH dimensions (v5): width-only sizing let short or
+     wide windows push the bottom of the stage — Dad included —
+     below the fold. The third term is the height budget
+     (viewport minus page padding and the hint line, ~80px)
+     converted back to a width through the 1280/800 ratio. */
+  width: min(1280px, 97vw, calc(160vh - 128px));
+  width: min(1280px, 97vw, calc(160dvh - 128px));
   height: auto;
   aspect-ratio: 1280 / 800;
   border-radius: 10px;
