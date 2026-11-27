@@ -9,6 +9,24 @@ import { GAME, VIEW } from './config.js';
 const INK = '#2B1B2E';
 const FONT = '"Baloo 2", system-ui, sans-serif';
 
+// The disaster log's twelve cards, in grid order. Hints are
+// always readable; a card's name only shows once its disaster
+// has actually happened (its id lands in game.metaGallery).
+const DISASTER_CARDS = [
+  { id: 'dadSlapsDad', name: 'Dad Slaps Dad', hint: 'He was aiming for you.' },
+  { id: 'soupHair', name: 'Soup Hair', hint: "Mom's hair looks... absorbent." },
+  { id: 'cutleryFly', name: 'Cutlery Cannon', hint: 'Make the cutlery fly.' },
+  { id: 'lampDrop', name: 'Lamp Drop', hint: 'Look up. Way up.' },
+  { id: 'denturesOut', name: 'Dentures Out', hint: "Grandpa's smile is detachable." },
+  { id: 'dogVisit', name: 'A Guest Arrives', hint: 'Sometimes a guest arrives.' },
+  { id: 'brawl', name: 'Table Brawl', hint: 'Start a fight. Then another. Then another.' },
+  { id: 'blackoutDodge', name: 'Dark Dodge', hint: 'Dodge perfectly in the dark.' },
+  { id: 'photoSmile', name: 'Photo Finish', hint: 'Smile for the camera.' },
+  { id: 'chain5', name: 'Chain Reaction', hint: 'One slap, five disasters.' },
+  { id: 'neverStop', name: 'Relentless', hint: 'Never stop dodging.' },
+  { id: 'finaleSlap', name: 'The Final Slap', hint: 'Nail the final slap.' },
+];
+
 export class Hud {
   constructor(ctx) {
     this.ctx = ctx;
@@ -38,6 +56,9 @@ export class Hud {
   }
 
   drawMeters(ctx, game) {
+    // The reference build shows no chrome at all during the
+    // scripted tutorial — just the family and the prompts.
+    if (game.state === 'playing' && game.tutorial !== 'done') return;
     // Hearts.
     for (let i = 0; i < GAME.hp; i++) {
       const x = 30 + i * 38;
@@ -55,55 +76,51 @@ export class Hud {
       ctx.stroke();
       ctx.restore();
     }
-    // PARTY RUINED meter, top-left under the hearts.
+    // PARTY RUINED meter, top-left under the hearts: label over
+    // the bar, percentage at the bar's right end.
     const ruined = Math.min(1, game.chaosTotal / GAME.destructionFull);
-    const bx = 16;
-    const by = 52;
-    const bw = 216;
-    ctx.fillStyle = 'rgba(26,15,34,0.55)';
-    roundRect(ctx, bx - 4, by - 4, bw + 8, 30, 8);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.18)';
-    roundRect(ctx, bx, by, bw, 13, 6);
+    const bx = 18;
+    const bw = 250;
+    ctx.font = `800 12px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText('PARTY RUINED', bx, 64);
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    roundRect(ctx, bx, 70, bw, 12, 6);
     ctx.fill();
     if (ruined > 0) {
-      ctx.fillStyle = '#FF3FA4';
-      roundRect(ctx, bx, by, bw * ruined, 13, 6);
+      ctx.fillStyle = '#FF6A3C';
+      roundRect(ctx, bx, 70, bw * ruined, 12, 6);
       ctx.fill();
     }
     ctx.font = `800 13px ${FONT}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillText(`PARTY RUINED ${Math.round(ruined * 100)}%`, bx + 2, by + 27);
+    ctx.fillStyle = '#FFC94A';
+    ctx.fillText(`${Math.round(ruined * 100)}%`, bx + bw + 8, 82);
 
-    // Clock, top-centre.
+    // Round clock under it: a pale track that fills yellow as
+    // the ninety seconds burn down, seconds left at its end.
     const remain = Math.max(0, GAME.duration - game.elapsed);
-    const cw = 340;
-    const cx = VIEW.width / 2 - cw / 2;
-    ctx.fillStyle = 'rgba(26,15,34,0.55)';
-    roundRect(ctx, cx - 4, 8, cw + 8, 22, 8);
+    const spent = Math.min(1, game.elapsed / GAME.duration);
+    ctx.fillStyle = '#F5EFE2';
+    roundRect(ctx, bx, 92, bw, 12, 6);
     ctx.fill();
-    ctx.fillStyle = remain <= 10 ? '#FF5A4E' : '#FFC94A';
-    if (game.tutorial === 'done') {
-      roundRect(ctx, cx, 12, cw * (remain / GAME.duration), 14, 6);
+    if (spent > 0) {
+      ctx.fillStyle = remain <= 10 ? '#FF5A4E' : '#FFC94A';
+      roundRect(ctx, bx, 92, bw * spent, 12, 6);
       ctx.fill();
     }
-    ctx.font = `800 15px ${FONT}`;
-    ctx.textAlign = 'center';
+    ctx.font = `800 13px ${FONT}`;
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillText(game.tutorial === 'done' ? `${Math.ceil(remain)}s` : 'TUTORIAL', VIEW.width / 2, 46);
+    ctx.fillText(`${Math.ceil(remain)}s`, bx + bw + 8, 104);
 
-    // Score, top-right.
+    // Score, top-right: the number alone, big and gold.
     ctx.textAlign = 'right';
-    ctx.font = `800 15px ${FONT}`;
-    ctx.fillStyle = '#FFE9A3';
-    ctx.fillText('SCORE', VIEW.width - 18, 24);
-    ctx.font = `800 34px ${FONT}`;
+    ctx.font = `800 30px ${FONT}`;
     ctx.lineWidth = 5;
     ctx.strokeStyle = INK;
-    ctx.strokeText(String(game.score), VIEW.width - 18, 58);
+    ctx.strokeText(String(game.score), VIEW.width - 20, 48);
     ctx.fillStyle = '#FFC94A';
-    ctx.fillText(String(game.score), VIEW.width - 18, 58);
+    ctx.fillText(String(game.score), VIEW.width - 20, 48);
     ctx.textAlign = 'left';
   }
 
@@ -114,7 +131,7 @@ export class Hud {
     const fade = n.t > n.dur - 0.3 ? Math.max(0, (n.dur - n.t) / 0.3) : 1;
     ctx.save();
     ctx.globalAlpha = fade;
-    ctx.translate(VIEW.width / 2, 120);
+    ctx.translate(VIEW.width / 2, 280);
     ctx.scale(pop, pop);
     ctx.font = `800 44px ${FONT}`;
     ctx.textAlign = 'center';
@@ -149,71 +166,145 @@ export class Hud {
   }
 
   drawResults(ctx, game) {
-    ctx.fillStyle = 'rgba(26,15,34,0.55)';
+    // Full-screen layout, matched to the reference build: dimmed
+    // room, the family polaroid big on the left, headline and
+    // stats on the right, rank letter in the corner, and the
+    // disaster log grid along the bottom.
+    ctx.fillStyle = 'rgba(26,15,34,0.78)';
     ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-    const pw = 620;
-    const ph = 480;
-    const px = VIEW.width / 2 - pw / 2;
-    const py = 120;
-    ctx.fillStyle = '#FFF8EA';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 4;
-    roundRect(ctx, px, py, pw, ph, 18);
-    ctx.fill();
-    ctx.stroke();
-
     const rank = game.rank;
     const ruined = Math.min(1, game.chaosTotal / GAME.destructionFull);
-    ctx.textAlign = 'center';
-    ctx.font = `800 38px ${FONT}`;
-    ctx.fillStyle = INK;
-    ctx.fillText(rank && rank.id === 'C' ? 'PARTY... FINE' : 'PARTY RUINED', VIEW.width / 2, py + 50);
 
-    // The family photo: the ruined print once the party is at
-    // least half destroyed, the clean one otherwise.
-    const img = ruined >= 0.5 ? this.photoRuined : this.photoClean;
+    // The polaroid: the ruined print once the finale landed or
+    // the party is well wrecked, the clean one otherwise.
+    const img = (ruined >= 0.25 || game.finaleDone) ? this.photoRuined : this.photoClean;
+    ctx.save();
+    ctx.translate(258, 292);
+    ctx.rotate(-0.03);
+    ctx.fillStyle = '#FFFDF6';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 3;
+    ctx.fillRect(-200, -218, 400, 436);
+    ctx.strokeRect(-200, -218, 400, 436);
     if (img && img.complete && img.naturalWidth > 0) {
-      const iw = 300;
-      const ih = (iw * img.naturalHeight) / img.naturalWidth;
-      ctx.drawImage(img, VIEW.width / 2 - iw / 2, py + 66, iw, ih);
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+      const scale = Math.max(360 / iw, 330 / ih);
+      const dw = iw * scale;
+      const dh = ih * scale;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-180, -198, 360, 330);
+      ctx.clip();
+      ctx.drawImage(img, -180 + (360 - dw) / 2, -198 + (330 - dh) / 2, dw, dh);
+      ctx.restore();
+    }
+    ctx.font = '700 27px "Segoe Script", "Comic Sans MS", cursive';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#4A2C1A';
+    ctx.fillText('Happy Birthday!', 0, 190);
+    ctx.restore();
+
+    // Headline and the new-best flag.
+    ctx.textAlign = 'left';
+    ctx.font = `800 26px ${FONT}`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(ruined < 0.5
+      ? "Timmy's birthday was... a little sticky."
+      : "Timmy's birthday was... a beautiful disaster.", 520, 118);
+    if (game.newBest) {
+      ctx.font = `800 17px ${FONT}`;
+      ctx.fillStyle = '#FF3FA4';
+      ctx.fillText('NEW BEST!', 520, 148);
     }
 
+    // Rank letter and verdict, top-right, tipped a little.
     if (rank) {
       ctx.save();
-      ctx.translate(px + pw - 104, py + 62);
-      ctx.rotate(-0.22);
-      ctx.font = `800 24px ${FONT}`;
-      const label = `${rank.id} — ${rank.stamp}`;
-      const w = ctx.measureText(label).width + 26;
-      ctx.strokeStyle = '#FF5A4E';
-      ctx.lineWidth = 2.5;
-      ctx.strokeRect(-w / 2, -23, w, 38);
-      ctx.fillStyle = '#FF5A4E';
-      ctx.fillText(label, 0, 5);
+      ctx.translate(1152, 104);
+      ctx.rotate(0.07);
+      ctx.font = `800 74px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#FF5DA2';
+      ctx.fillText(rank.id, 0, 0);
+      ctx.font = `800 16px ${FONT}`;
+      ctx.fillText(rank.stamp, 0, 44);
       ctx.restore();
     }
 
-    ctx.font = `800 21px ${FONT}`;
-    ctx.fillStyle = INK;
+    // Stat rows.
     const rows = [
-      `Score  ${game.score}`,
-      `Longest Chain  x${game.longestChain ?? 0}      Party Destroyed  ${Math.round(ruined * 100)}%`,
+      ['SCORE', String(game.score)],
+      ['BEST COMBO', `x${game.maxCombo ?? game.bestCombo ?? 0}`],
+      ['LONGEST CHAIN', `x${game.longestChain ?? 0}`],
+      ['PARTY RUINED', `${Math.round(ruined * 100)}%`],
     ];
-    rows.forEach((line, i) => ctx.fillText(line, VIEW.width / 2, py + 300 + i * 34));
+    rows.forEach(([label, value], i) => {
+      const y = 212 + i * 44;
+      ctx.font = `800 16px ${FONT}`;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#E8DDF2';
+      ctx.fillText(label, 520, y);
+      ctx.font = `800 25px ${FONT}`;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#FFC94A';
+      ctx.fillText(value, 1000, y);
+    });
+    ctx.textAlign = 'left';
+    if (game.lifeBonus > 0) {
+      ctx.font = `600 13px ${FONT}`;
+      ctx.fillStyle = '#CFC4DD';
+      ctx.fillText(`(score includes +${game.lifeBonus} for the lives you kept)`, 520, 378);
+    }
 
     // The "so close" line, whenever a higher rank exists.
     if (rank) {
       const idx = GAME.ranks.indexOf(rank);
       if (idx > 0) {
         const next = GAME.ranks[idx - 1];
-        ctx.font = `800 20px ${FONT}`;
-        ctx.fillStyle = '#FF3FA4';
-        ctx.fillText(`Only ${next.min - game.score} pts from ${next.id} rank!`, VIEW.width / 2, py + 386);
+        const gap = next.min - game.score;
+        if (gap > 0) {
+          ctx.font = `800 17px ${FONT}`;
+          ctx.fillStyle = '#57C8FF';
+          ctx.fillText(`Only ${gap} pts from ${next.id} rank!`, 520, 410);
+        }
       }
     }
+
+    // Disaster log: twelve cards, found ones named in gold,
+    // the rest still ??? with their hint showing.
+    ctx.font = `800 15px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#E8DDF2';
+    ctx.fillText('DISASTER LOG', VIEW.width / 2, 498);
+    const found = game.metaGallery instanceof Set ? game.metaGallery : new Set();
+    const cw = 196;
+    const ch = 56;
+    const gap = 8;
+    const x0 = (VIEW.width - (6 * cw + 5 * gap)) / 2;
+    DISASTER_CARDS.forEach((card, i) => {
+      const cx = x0 + (i % 6) * (cw + gap);
+      const cy = 514 + Math.floor(i / 6) * (ch + gap);
+      const isFound = found.has(card.id);
+      ctx.fillStyle = 'rgba(20,12,26,0.55)';
+      roundRect(ctx, cx, cy, cw, ch, 8);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1.5;
+      roundRect(ctx, cx, cy, cw, ch, 8);
+      ctx.stroke();
+      ctx.font = `800 12px ${FONT}`;
+      ctx.fillStyle = isFound ? '#FFC94A' : '#9A8FA8';
+      ctx.fillText(isFound ? card.name : '???', cx + cw / 2, cy + 22);
+      ctx.font = `600 10px ${FONT}`;
+      ctx.fillStyle = isFound ? '#D8CFE4' : '#8A7F98';
+      const hint = card.hint.length > 36 ? `${card.hint.slice(0, 35)}…` : card.hint;
+      ctx.fillText(hint, cx + cw / 2, cy + 40);
+    });
+
     ctx.font = `800 19px ${FONT}`;
-    ctx.fillStyle = '#5A4632';
-    ctx.fillText('BUZZ AGAIN  [R]', VIEW.width / 2, py + 436);
+    ctx.fillStyle = '#37C8B4';
+    ctx.fillText('BUZZ AGAIN — PRESS R', VIEW.width / 2, 690);
     ctx.textAlign = 'left';
   }
 }

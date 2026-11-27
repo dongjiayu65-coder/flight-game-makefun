@@ -1,18 +1,24 @@
-// fly.js — the player character's body: an under-damped spring
-// that chases the steering point with a little overshoot, and the
+// fly.js — the player character's body: it flies straight at the
+// steering point at a measured pace (full cruise until the last
+// stretch, then a sqrt braking curve into the perch), and the
 // dash ("flash") that bursts it out of a closing ring. Landing is
 // the game's business; this class just moves and reports.
 
-import { VIEW } from './config.js';
+import { ROOM, VIEW } from './config.js';
 
 const FLASH_TIME = 0.12;  // seconds, out and done
 const FLASH_IFRAMES = 0.18;
 const SPLAT_TIME = 0.45;
 const SPLAT_IFRAMES = 1.2;
 
-const SPRING_K = 42;
-const SPRING_DAMP = 9.5;
-const MAX_SPEED = 540;
+// Flight model, matched to the reference build's black-box
+// traces: velocity is set directly toward the target each frame
+// (no inertia, no overshoot), magnitude min(CRUISE, K*sqrt(dist))
+// — flat out at 720 px/s until ~135 px out, then braking.
+const CRUISE_SPEED = 720;
+const BRAKE_K = 62;
+// The fly's world is the table rectangle grown by this margin.
+const FLY_MARGIN = 30;
 
 export class Fly {
   constructor(rng, x, y) {
@@ -24,6 +30,11 @@ export class Fly {
     this.heading = -Math.PI / 2;
     this.heads = null; // the game wires the family's faces in here
     this.landedOn = null; // a table zone, owned by the game
+    this.target = { x, y }; // current steering point, after clamping
+    this.trail = [];        // recent positions, newest first
+    this.wingPhase = 0;     // wing flutter clock for the renderer
+    this.alive = true;
+    this.justFlashed = false;
     // Flash state.
     this.flashing = false;
     this.flashT = 0;
@@ -56,6 +67,7 @@ export class Fly {
   startFlash(tx, ty, cooldownSec) {
     if (!this.flashReady) return false;
     this.flashing = true;
+    this.justFlashed = true;
     this.flashT = FLASH_TIME;
     this.flashFrom = { x: this.x, y: this.y };
     this.flashTo = { x: tx, y: ty };
@@ -80,6 +92,8 @@ export class Fly {
     this.iframesT = Math.max(0, this.iframesT - dt);
     this.invulnT = Math.max(0, this.invulnT - dt);
     this.squashT = Math.max(0, this.squashT - dt);
+    if (!this.flashing) this.justFlashed = false;
+    this.wingPhase += dt * (this.speed > 40 ? 48 : 24);
 
     if (this.flashing) {
       // Ease-out cubic along the burst; velocity is the curve's
@@ -100,30 +114,33 @@ export class Fly {
         this.vy *= 0.4;
       }
     } else if (this.squashT <= 0) {
-      const k = SPRING_K * (inMist ? 0.6 : 1);
-      const tx = steer ? steer.x : this.x;
-      const ty = steer ? steer.y : this.y;
-      // Landing flare: close to the steer point the wings brake
-      // harder, so the fly settles instead of orbiting its perch.
-      let damp = SPRING_DAMP;
-      if (steer) {
-        const dist = Math.hypot(tx - this.x, ty - this.y);
-        if (dist < 130) damp *= 1 + 1.8 * (1 - dist / 130);
-      }
-      this.vx += ((tx - this.x) * k - this.vx * damp) * dt;
-      this.vy += ((ty - this.y) * k - this.vy * damp) * dt;
-      const max = MAX_SPEED * (inMist ? 0.6 : 1);
-      const sp = this.speed;
-      if (sp > max) {
-        this.vx *= max / sp;
-        this.vy *= max / sp;
-      }
-      if (!steer && sp < 30) {
-        this.vx *= 0.85;
-        this.vy *= 0.85;
+      // Steer point clamped to the fly's world: the table
+      // rectangle grown by FLY_MARGIN on every side.
+      const t = ROOM.table;
+      const tx = Math.min(t.x + t.w + FLY_MARGIN, Math.max(t.x - FLY_MARGIN, steer ? steer.x : this.x));
+      const ty = Math.min(t.y + t.h + FLY_MARGIN, Math.max(t.y - FLY_MARGIN, steer ? steer.y : this.y));
+      this.target.x = tx;
+      this.target.y = ty;
+      const dx = tx - this.x;
+      const dy = ty - this.y;
+      const dist = Math.hypot(dx, dy);
+      const mistF = inMist ? 0.6 : 1;
+      if (dist > 0.5) {
+        const sp = Math.min(CRUISE_SPEED * mistF, BRAKE_K * mistF * Math.sqrt(dist));
+        this.vx = (dx / dist) * sp;
+        this.vy = (dy / dist) * sp;
+      } else {
+        this.vx = 0;
+        this.vy = 0;
       }
       this.x = Math.min(VIEW.width - 12, Math.max(12, this.x + this.vx * dt));
       this.y = Math.min(VIEW.height - 12, Math.max(12, this.y + this.vy * dt));
+      // Motion trail for the renderer, newest first.
+      const head = this.trail[0];
+      if (!head || Math.hypot(this.x - head.x, this.y - head.y) > 3) {
+        this.trail.unshift({ x: this.x, y: this.y });
+        if (this.trail.length > 10) this.trail.pop();
+      }
     }
 
     if (this.speed > 40) {

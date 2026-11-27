@@ -26,8 +26,8 @@ export const PALETTE = {
 // and "away from the table" math measure from its centre) and the
 // chandelier's anchor point over the middle of the table.
 export const ROOM = {
-  table: { x: 290, y: 195, w: 700, h: 420 },
-  lamp: { x: 640, y: 405, r: 70 },
+  table: { x: 206, y: 172, w: 865, h: 524 },
+  lamp: { x: 700, y: 88, r: 70 },
 };
 
 // Fly movement and the dash ("flash").

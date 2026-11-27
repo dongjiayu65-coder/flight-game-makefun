@@ -15,6 +15,7 @@ export function makeHuman(seat) {
     x: seat.x,
     y: seat.y,
     headR: seat.headR,
+    speedScale: seat.speedScale ?? 1, // personal tempo, scales warn time
     look: seat.look, // { clothes, skin, hairColor }
     expression: 'happy',
     shownExpr: 'happy',
@@ -70,9 +71,8 @@ export function timingAt(t) {
   };
 }
 
-// How far a warning ring has closed, 0 -> 1. Grandpa's stall is
-// baked into atk.t itself (his clock genuinely runs slow for a
-// stretch), so this stays a plain ratio.
+// How far a warning ring has closed, 0 -> 1: a plain ratio of
+// the attack's own clock, which runs in real time.
 export function warnProgress(atk) {
   if (!atk || !(atk.dur > 0)) return 1;
   return Math.min(1, Math.max(0, atk.t / atk.dur));
@@ -123,7 +123,7 @@ export class Director {
     let kind = 'palm';
     let swatter = false;
     let secondPending = false;
-    let radius = 46;
+    let radius = 56;
     let warnFrom = 110;
     if (!opts.noWeapon && !opts.finale) {
       if (owner.id === 'mom' && elapsed >= TAUNT.sprayAt) {
@@ -147,6 +147,7 @@ export class Director {
       warnFrom = 130;
     }
     if (opts.idle) warn *= opts.warnScale ?? 1;
+    if (!opts.finale) warn *= owner.speedScale || 1;
     owner.cooldownT = Math.max(0, timing.cooldown - (swatter ? 0.4 : 0));
     const atk = {
       id: this.nextId++,
@@ -162,6 +163,7 @@ export class Director {
       personality: owner.id,
       state: 'warning',
       t: 0,
+      trackT: 0,
       dur: warn,
       remainMs: warn * 1000,
       locked: false,
@@ -239,30 +241,32 @@ export class Director {
     for (const atk of this.attacks) atk.justLocked = false;
     for (const atk of [...this.attacks]) {
       if (atk.state === 'warning') {
-        if (!atk.locked && fly) {
-          // Still hunting: the slap point trails the fly.
-          const k = Math.min(1, dt * 14);
-          atk.x += (fly.x - atk.x) * k;
-          atk.y += (fly.y - atk.y) * k;
-          atk.dir = Math.atan2(atk.y - atk.fromY, atk.x - atk.fromX);
-        }
-        // Grandpa's arm gives out mid-swing: his clock crawls for
-        // the middle stretch of the warning, then recovers.
-        let rate = 1;
+        // The slap point does not glide after the fly: it sits
+        // where the fly was, then re-aims in discrete snaps —
+        // every quarter second while the ring closes, and once
+        // more, finally, at the lock moment. Tutorial slaps are
+        // scripted — their point never moves and never locks.
         atk.stalled = false;
-        if (atk.personality === 'grandpa' && !atk.finale) {
-          const f = atk.t / atk.dur;
-          if (f > 0.3 && f < 0.55) {
-            rate = 0.3;
-            atk.stalled = true;
+        atk.t += dt;
+        atk.remainMs = Math.max(0, (atk.dur - atk.t) * 1000);
+        if (!atk.locked && !atk.tutorial && fly) {
+          atk.trackT += dt;
+          if (atk.trackT >= 0.25) {
+            atk.trackT = 0;
+            atk.x = fly.x;
+            atk.y = fly.y;
+            atk.dir = Math.atan2(atk.y - atk.fromY, atk.x - atk.fromX);
           }
         }
-        atk.t += dt * rate;
-        atk.remainMs = Math.max(0, (atk.dur - atk.t) * 1000);
-        const lockFrac = atk.kind === 'poke' ? 0.72 : 0.5;
-        if (!atk.locked && atk.t >= atk.dur * lockFrac) {
+        const lockFrac = atk.kind === 'poke' ? 0.85 : 0.68;
+        if (!atk.locked && !atk.tutorial && atk.t >= atk.dur * lockFrac) {
           atk.locked = true;
           atk.justLocked = true;
+          if (fly) {
+            atk.x = fly.x;
+            atk.y = fly.y;
+            atk.dir = Math.atan2(atk.y - atk.fromY, atk.x - atk.fromX);
+          }
         }
         if (atk.t >= atk.dur) {
           atk.state = 'slam';
