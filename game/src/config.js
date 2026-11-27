@@ -45,18 +45,18 @@ export const FLY = {
 export const TAUNT = {
   idleAfter: 3,      // seconds unprovoked before an air slap
   idleWarnScale: 1.1,
-  sprayAt: 30,       // Mom's bug spray
-  swatterAt: 40,     // Grandpa's swatter
-  doubleAt: 55,      // Dad's double slap, Timmy's poke, two at once
-  doubleGap: 0.35,   // seconds between Dad's two slaps
+  sprayAt: 27,       // Mom's bug spray
+  swatterAt: 36,     // Grandpa's swatter
+  doubleAt: 49,      // Dad's double slap, Timmy's poke, two at once
+  doubleGap: 0.32,   // seconds between Dad's two slaps
 };
 
 // Dodge grades, best first. A dash started with at most
 // maxRemainMs left on the warning earns the grade.
 export const RATINGS = [
-  { id: 'perfect', mult: 5, maxRemainMs: 70 },
-  { id: 'close', mult: 3, maxRemainMs: 200 },
-  { id: 'good', mult: 2, maxRemainMs: 500 },
+  { id: 'perfect', mult: 5, maxRemainMs: 64 },
+  { id: 'close', mult: 3, maxRemainMs: 182 },
+  { id: 'good', mult: 2, maxRemainMs: 455 },
   { id: 'early', mult: 1, maxRemainMs: Infinity },
 ];
 
@@ -88,7 +88,7 @@ export const EVENTS = {
   cup: { chaos: 150, cooldown: 6 },
   food: { chaos: 200, cooldown: 6 },
   candle: { chaos: 150, cooldown: 3 },
-  times: [20, 32, 44, 56, 68],
+  times: [18, 28, 39, 50, 60],
   pool: [
     { id: 'dog', weight: 25 },
     { id: 'blackout', weight: 20 },
@@ -100,7 +100,7 @@ export const EVENTS = {
 
 // The random-event draw: one pick at each of these marks, weighted.
 export const RANDOM_EVENTS = {
-  times: [20, 32, 44, 56, 68],
+  times: [18, 28, 39, 50, 60],
   pool: [
     { id: 'dog', weight: 25 },
     { id: 'blackout', weight: 20 },
@@ -111,16 +111,16 @@ export const RANDOM_EVENTS = {
 };
 
 export const PHASES = {
-  finaleAt: 80,
-  finaleTriggerBy: 89, // not on the cake by now? They do it themselves
+  finaleAt: 70,
+  finaleTriggerBy: 79, // not on the cake by now? They do it themselves
 };
 
 export const GAME = {
-  duration: 90,
+  duration: 80,
   hp: 3,
   lifeBonus: 3000,       // per heart left when the round ends
   destructionFull: 6000, // chaos points for a 100% ruined party
-  restockAt: 55,         // Mom brings seconds, once
+  restockAt: 49,         // Mom brings seconds, once
   finaleBase: 2000,
   finaleComboCap: 2.0,   // the finale's combo multiplier tops out here
   finaleSplatScore: 500, // caught in the finale: the cake still pops
@@ -160,8 +160,8 @@ export const V3 = {
 // The expression machine's clocks and thresholds.
 export const MOOD = {
   suspiciousAt: 0.25,   // destruction share: default face sours
-  steamFrom: 55,        // seconds in: default face turns angry
-  terrifiedFrom: 80,    // the finale window: everyone is scared
+  steamFrom: 49,        // seconds in: default face turns angry
+  terrifiedFrom: 70,    // the finale window: everyone is scared
   annoyDecayEvery: 10,  // seconds per point of annoyance forgiven
   gloatTime: 1.2,
   popTime: 0.25,

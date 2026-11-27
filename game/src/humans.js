@@ -43,12 +43,16 @@ export function makeHuman(seat) {
 
 // Attack pacing over the round: [fromSecond, tauntDelay, warn,
 // cooldown], blended linearly between rows so nothing jumps.
+// The 80-second round compresses the marks by 8/9 and the tempo
+// columns run x0.91 (attacks ~10% more often) — except the warn
+// in the first two rows: tutorial slaps are timed off row 0, and
+// the opening seconds keep their gentler 1.4s ring.
 const PACE_ROWS = [
-  [0, 0.4, 1.4, 2.5],
-  [10, 0.4, 1.4, 2.5],
-  [30, 0.35, 1.2, 2.2],
-  [55, 0.3, 1.05, 1.9],
-  [80, 0.2, 0.9, 1.5],
+  [0, 0.36, 1.4, 2.28],
+  [9, 0.36, 1.4, 2.28],
+  [27, 0.32, 1.09, 2.0],
+  [49, 0.27, 0.96, 1.73],
+  [71, 0.18, 0.82, 1.37],
 ];
 
 export function timingAt(t) {
